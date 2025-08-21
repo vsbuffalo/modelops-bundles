@@ -6,14 +6,22 @@ storage interfaces for registry and external storage operations.
 """
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
-from modelops_contracts.artifacts import ResolvedBundle
+from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
 from ..runtime_types import ContentProvider, MatEntry
 from ..storage.base import ExternalStore, OrasStore
 
 __all__ = ["OrasExternalProvider"]
+
+
+def _short_digest(digest: str) -> str:
+    """Truncate digest for friendlier error messages."""
+    if digest.startswith("sha256:") and len(digest) > 18:
+        return digest[:18] + "..."
+    return digest
 
 
 class OrasExternalProvider(ContentProvider):
@@ -45,19 +53,89 @@ class OrasExternalProvider(ContentProvider):
         """
         Enumerate content from ORAS registry and external storage.
         
-        Stage 2: Intentionally unimplemented (wired for compile-time only).
-        Stage 3 will use self._oras/self._external to produce MatEntry items.
+        Reads layer index manifests from ORAS store and yields MatEntry objects
+        for both ORAS content (with bytes) and external references (with metadata).
         
         Args:
-            resolved: The resolved bundle with manifest information
+            resolved: The resolved bundle with manifest information  
             layers: List of layer names to enumerate
             
         Yields:
             MatEntry objects for each file to materialize
+            
+        Raises:
+            ValueError: If layer index missing, invalid, or malformed
         """
-        # Stage 2: intentionally unimplemented (compile-time wiring only)
-        # Stage 3 will use self._oras/self._external here to produce entries
-        raise NotImplementedError("Implemented in Stage 3")
+        for layer in layers:
+            # 1. Check layer has index
+            if layer not in resolved.layer_indexes:
+                raise ValueError(f"resolved missing index for layer '{layer}'")
+            
+            # 2. Fetch and validate index
+            index_digest = resolved.layer_indexes[layer]
+            try:
+                payload = self._oras.get_manifest(index_digest)
+            except KeyError:
+                raise ValueError(f"missing index manifest {_short_digest(index_digest)} for layer '{layer}'")
+            
+            try:
+                doc = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise ValueError(f"invalid JSON in index for layer '{layer}': {e}")
+                
+            if doc.get("mediaType") != LAYER_INDEX:
+                raise ValueError(f"invalid mediaType for layer '{layer}': expected {LAYER_INDEX}")
+            
+            # 3. Process each entry
+            for entry in doc.get("entries", []):
+                path = entry.get("path")
+                if not path:
+                    raise ValueError(f"entry missing 'path' in layer '{layer}'")
+                
+                # Check layer field if present
+                if "layer" in entry and entry["layer"] != layer:
+                    raise ValueError(f"entry layer mismatch in '{layer}': entry says '{entry['layer']}'")
+                
+                # Exactly one of digest or external
+                has_digest = "digest" in entry
+                has_external = "external" in entry
+                
+                if has_digest and has_external:
+                    raise ValueError(f"entry must have exactly one of 'digest' or 'external' for path '{path}'")
+                elif not has_digest and not has_external:
+                    raise ValueError(f"entry must have exactly one of 'digest' or 'external' for path '{path}'")
+                
+                if has_external:
+                    ext = entry["external"]
+                    # Validate required external fields
+                    required_fields = ["uri", "sha256", "size"]
+                    missing = [f for f in required_fields if f not in ext]
+                    if missing:
+                        raise ValueError(f"external entry missing fields {missing} for path '{path}' in layer '{layer}'")
+                    
+                    yield MatEntry(
+                        path=path,
+                        layer=layer,
+                        kind="external",
+                        content=None,
+                        uri=ext["uri"],
+                        sha256=ext["sha256"],
+                        size=ext["size"],
+                        tier=ext.get("tier")  # Optional
+                    )
+                else:  # has_digest
+                    digest = entry["digest"]
+                    try:
+                        blob = self._oras.get_blob(digest)
+                    except KeyError:
+                        raise ValueError(f"missing blob {_short_digest(digest)} for layer '{layer}' path '{path}'")
+                    
+                    yield MatEntry(
+                        path=path,
+                        layer=layer,
+                        kind="oras",
+                        content=blob
+                    )
 
     def fetch_external(self, entry: MatEntry) -> bytes:
         """

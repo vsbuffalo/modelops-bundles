@@ -14,6 +14,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from .path_safety import safe_relpath
+
 __all__ = ["PointerFile", "write_pointer_file", "read_pointer_file"]
 
 
@@ -85,9 +87,12 @@ def write_pointer_file(
     Raises:
         OSError: If file write fails
     """
+    # Validate path safety first
+    safe_original_relpath = safe_relpath(original_relpath)
+    
     # Construct pointer file path following the canonical rule
     # dest/.mops/ptr/<original_dir>/<filename>.json
-    original_path = Path(original_relpath)
+    original_path = Path(safe_original_relpath)
     pointer_relpath = Path(".mops/ptr") / original_path.parent / f"{original_path.name}.json"
     pointer_path = dest_dir / pointer_relpath
     
@@ -100,7 +105,7 @@ def write_pointer_file(
         sha256=sha256,
         size=size,
         tier=tier,
-        original_path=original_relpath,
+        original_path=safe_original_relpath,
         layer=layer,
         fulfilled=fulfilled,
         local_path=local_path

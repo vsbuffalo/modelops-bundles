@@ -561,7 +561,7 @@ def test_path_traversal_attacks_rejected(tmp_path):
     evil_provider = EvilProvider()
     
     # Each dangerous path should be rejected with ValueError
-    with pytest.raises(ValueError, match="unsafe entry path"):
+    with pytest.raises(ValueError, match="unsafe path"):
         materialize(ref, str(tmp_path), role="runtime", provider=evil_provider)
 
 

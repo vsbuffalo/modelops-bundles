@@ -577,6 +577,59 @@ class ContentProvider(Protocol):
         ...
 ```
 
+### Layer Index Format
+
+Each layer has an associated index manifest stored in ORAS with mediaType `LAYER_INDEX`. The OrasExternalProvider reads these indexes to enumerate files for materialization.
+
+**Example layer index for mixed ORAS + external content:**
+
+```json
+{
+  "mediaType": "application/vnd.modelops.layer+json",
+  "entries": [
+    {
+      "path": "src/model.py",
+      "digest": "sha256:abc123def456...",
+      "layer": "code"
+    },
+    {
+      "path": "configs/base.yaml", 
+      "digest": "sha256:789abc012def...",
+      "layer": "code"
+    },
+    {
+      "path": "data/train.csv",
+      "external": {
+        "uri": "az://epidata/training/train.csv",
+        "sha256": "def456abc789012...",
+        "size": 2247583616,
+        "tier": "cool"
+      },
+      "layer": "data"
+    },
+    {
+      "path": "data/test.csv",
+      "external": {
+        "uri": "az://epidata/training/test.csv", 
+        "sha256": "012def456abc789...",
+        "size": 1048576
+      },
+      "layer": "data"
+    }
+  ]
+}
+```
+
+**Layer Index Rules:**
+- Each entry must have `path` and `layer` fields
+- Exactly one of `digest` (for ORAS content) or `external` (for external storage)
+- External entries require `uri`, `sha256`, and `size`; `tier` is optional
+- The `layer` field must match the layer being indexed (validated by provider)
+- Paths use POSIX forward slashes and are relative to bundle root
+
+**ResolvedBundle.layer_indexes:**
+The `ResolvedBundle` type now includes a `layer_indexes: Dict[str, str]` field mapping layer names to the digest of their index manifest. This enables the provider to find and parse the correct index for each requested layer.
+
 ### Design Benefits
 
 As shown in the architecture diagram above, this layered design provides:

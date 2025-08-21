@@ -24,7 +24,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-modelops-contracts = { path = "../modelops-contracts" }
+modelops-contracts = { path = "../modelops-contracts", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["src"]

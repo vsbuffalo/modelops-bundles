@@ -114,13 +114,17 @@ class ExternalStore(Protocol):
     
     def stat(self, uri: str) -> ExternalStat:
         """
-        Get metadata for external object.
+        Get metadata for external object without fetching content.
+        
+        This method is intended for future verify/integrity check workflows
+        to validate external references against expected metadata without
+        the cost of downloading large data files.
         
         Args:
             uri: External storage URI
             
         Returns:
-            Object metadata
+            Object metadata (size, SHA256, tier) for verification
             
         Raises:
             FileNotFoundError: If object does not exist

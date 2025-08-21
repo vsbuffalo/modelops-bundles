@@ -9,39 +9,18 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, List
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
+from .path_safety import safe_relpath
 from .pointer_writer import write_pointer_file
 from .runtime_types import ContentProvider, MatEntry
 
 __all__ = ["resolve", "materialize", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
 
 
-def _safe_relpath(p: str) -> str:
-    """
-    Validate and normalize entry paths to prevent traversal attacks.
-    
-    Rejects:
-    - Absolute paths
-    - Paths containing '..' components
-    - Paths starting with '.mops/' (reserved metadata area)
-    
-    Args:
-        p: Entry path from provider
-        
-    Returns:
-        Normalized relative path safe for use
-        
-    Raises:
-        ValueError: If path is unsafe
-    """
-    rel = PurePosixPath(p)
-    if rel.is_absolute() or ".." in rel.parts or str(rel).startswith(".mops/"):
-        raise ValueError(f"unsafe entry path: {p}")
-    return str(rel)
 
 
 # Exception Types
@@ -204,7 +183,7 @@ def materialize(
     seen: dict[str, str] = {}  # path -> first layer that claimed it
     
     for entry in entries:
-        entry_path = _safe_relpath(entry.path)
+        entry_path = safe_relpath(entry.path)
         if entry_path in seen:
             raise WorkdirConflict(
                 f"Duplicate materialization path: {entry_path}",
