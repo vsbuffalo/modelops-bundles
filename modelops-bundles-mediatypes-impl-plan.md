@@ -471,6 +471,61 @@ ContentProvider owns content enumeration and retrieval for a set of layers:
 
 This keeps runtime pure and deterministic while letting storage strategies evolve.
 
+### Architecture Overview
+
+Here's how the components relate in our layered, protocol-based design:
+
+```
+┌─────────────┐
+│  Runtime    │ (materialize function)
+└─────┬───────┘
+      │ uses
+      ▼
+┌─────────────────────┐
+│ ContentProvider     │ (Protocol/Interface)
+│ - iter_entries()    │
+│ - fetch_external()  │
+└─────────────────────┘
+      ▲
+      │ implements
+      │
+┌─────────────────────────┐
+│ OrasExternalProvider    │ (Hybrid ORAS + External)
+│ - Uses storage backends │
+└───────┬─────────┬───────┘
+        │         │
+     uses      uses
+        │         │
+        ▼         ▼
+┌──────────┐  ┌──────────────┐
+│OrasStore │  │ExternalStore │ (Storage Protocols)
+└──────────┘  └──────────────┘
+     ▲              ▲
+     │              │
+implements     implements
+     │              │
+┌──────────┐  ┌──────────────┐
+│FakeOras  │  │FakeExternal  │ (Test Implementations)
+│Store     │  │Store         │
+└──────────┘  └──────────────┘
+```
+
+### Why "OrasExternalProvider"?
+
+The name reflects its hybrid storage strategy:
+- **Oras** - Handles ORAS registry content (small files: code, configs, manifests)
+- **External** - Handles external blob storage (large files: data, models, artifacts)
+
+This hybrid approach keeps registries lean while maintaining content integrity. Small files go through the registry for versioning and signing, while large files use cost-effective blob storage with pointer files for discovery.
+
+### Component Roles
+
+- **Runtime**: Pure business logic, only knows ContentProvider protocol
+- **ContentProvider**: Protocol defining the runtime's needs (iter_entries, fetch_external)
+- **OrasExternalProvider**: Production implementation orchestrating both storage types
+- **OrasStore/ExternalStore**: Storage protocols abstracting registry/blob operations
+- **Fakes**: In-memory test implementations for deterministic testing without network calls
+
 ### Responsibility Split
 
 | Concern                                                   | Runtime (`materialize`) | ContentProvider |
@@ -480,7 +535,7 @@ This keeps runtime pure and deterministic while letting storage strategies evolv
 | Idempotency & conflict detection (CREATED/UNCHANGED/…)    | ✅                       | —               |
 | Atomic writes, fsync, `os.replace`                        | ✅                       | —               |
 | Pointer placement under `.mops/ptr/**`                    | ✅                       | —               |
-| Enumerate entries for layers (paths, kinds)               | —                       | ✅               |
+| Enumerate entries for layers (paths, kinds)               | —                       | ✅ (`iter_entries`) |
 | Provide ORAS file bytes                                   | —                       | ✅               |
 | Provide external metadata (uri/sha256/size/tier)          | —                       | ✅               |
 | Prefetch external bytes                                   | —                       | ✅ (`fetch_external`) |
@@ -509,7 +564,7 @@ class MatEntry:
 
 ```python
 class ContentProvider(Protocol):
-    def enumerate(
+    def iter_entries(
         self, 
         resolved: ResolvedBundle, 
         layers: list[str]
@@ -523,6 +578,8 @@ class ContentProvider(Protocol):
 ```
 
 ### Design Benefits
+
+As shown in the architecture diagram above, this layered design provides:
 
 1. **Runtime Purity**: `materialize()` contains zero registry/storage-specific code
 2. **Testability**: Tests inject `FakeProvider` with deterministic content
@@ -593,7 +650,7 @@ class ExternalStore(Protocol):
 | Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via OrasStore/ExternalStore |
 | Authentication/credentials | ❌ Never | ✅ Implementation detail |
 | Network retries/timeouts | ❌ Never | ✅ Implementation detail |
-| Content enumeration | ❌ Never | ✅ Via ContentProvider.enumerate() |
+| Content enumeration | ❌ Never | ✅ Via ContentProvider.iter_entries() |
 | Filesystem operations | ✅ Atomic writes | ❌ Never |
 | Pointer file placement | ✅ Canonical rules | ❌ Never |
 

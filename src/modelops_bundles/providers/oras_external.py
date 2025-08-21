@@ -1,51 +1,43 @@
 """
-Default ContentProvider implementation for production use.
+ContentProvider implementation using storage interfaces.
 
-This module provides the ORAS+External ContentProvider that is used
-in production to enumerate bundle content from registries and external
-storage systems.
+This module provides the ORAS+External ContentProvider that uses
+storage interfaces for registry and external storage operations.
 """
 from __future__ import annotations
 
-import os
 from typing import Iterable
 
 from modelops_contracts.artifacts import ResolvedBundle
 
 from ..runtime_types import ContentProvider, MatEntry
+from ..storage.base import ExternalStore, OrasStore
+
+__all__ = ["OrasExternalProvider"]
 
 
 class OrasExternalProvider(ContentProvider):
     """
-    Production ContentProvider that handles ORAS and external storage.
+    ContentProvider that uses storage interfaces for ORAS and external operations.
     
-    This provider:
-    - Fetches ORAS blobs from registries
-    - Resolves external storage references
-    - Yields MatEntry objects for materialization
+    This provider accepts storage implementations via dependency injection,
+    enabling testing with fakes and production use with real implementations.
     
-    In Stage 1, this is a stub that will be implemented later.
+    Stage 2: Constructor accepts stores, iter_entries() is implemented in Stage 3.
     """
     
-    def __init__(
-        self,
-        registry_url: str | None = None,
-        registry_auth: str | None = None,
-        external_config: dict | None = None,
-    ):
+    def __init__(self, *, oras: OrasStore, external: ExternalStore) -> None:
         """
-        Initialize the ORAS+External provider.
+        Initialize the provider with storage interfaces.
         
         Args:
-            registry_url: ORAS registry URL (or from env)
-            registry_auth: Registry authentication (or from env)
-            external_config: External storage configuration
+            oras: ORAS storage interface for registry operations
+            external: External storage interface for blob operations
         """
-        self.registry_url = registry_url or os.getenv("MOPS_REGISTRY_URL", "")
-        self.registry_auth = registry_auth or os.getenv("MOPS_REGISTRY_AUTH", "")
-        self.external_config = external_config or {}
+        self._oras = oras
+        self._external = external
     
-    def enumerate(
+    def iter_entries(
         self,
         resolved: ResolvedBundle,
         layers: list[str]
@@ -53,12 +45,8 @@ class OrasExternalProvider(ContentProvider):
         """
         Enumerate content from ORAS registry and external storage.
         
-        This is a stub for Stage 1. The real implementation will:
-        1. Connect to the ORAS registry
-        2. Fetch layer manifests
-        3. Download ORAS blobs
-        4. Resolve external storage references
-        5. Yield MatEntry objects
+        Stage 2: Intentionally unimplemented (wired for compile-time only).
+        Stage 3 will use self._oras/self._external to produce MatEntry items.
         
         Args:
             resolved: The resolved bundle with manifest information
@@ -67,38 +55,26 @@ class OrasExternalProvider(ContentProvider):
         Yields:
             MatEntry objects for each file to materialize
         """
-        # Stage 1: Stub implementation
-        # Real implementation will fetch from registry
-        raise NotImplementedError(
-            "OrasExternalProvider will be implemented in Stage 2"
-        )
+        # Stage 2: intentionally unimplemented (compile-time wiring only)
+        # Stage 3 will use self._oras/self._external here to produce entries
+        raise NotImplementedError("Implemented in Stage 3")
 
+    def fetch_external(self, entry: MatEntry) -> bytes:
+        """
+        Fetch external content using the external store.
+        
+        Stage 2: This path will be exercised only if entries are manually injected.
+        
+        Args:
+            entry: MatEntry with external metadata
+            
+        Returns:
+            Content bytes from external storage
+            
+        Raises:
+            ValueError: If entry is missing required external metadata
+        """
+        if entry.uri is None:
+            raise ValueError("external entry missing uri")
+        return self._external.get(entry.uri)
 
-def default_provider_from_env() -> ContentProvider:
-    """
-    Create the default ContentProvider from environment configuration.
-    
-    This helper is used by the CLI to construct the production provider
-    while keeping the runtime API pure (provider required).
-    
-    Environment variables:
-    - MOPS_REGISTRY_URL: ORAS registry URL
-    - MOPS_REGISTRY_AUTH: Registry authentication
-    - MOPS_EXTERNAL_CONFIG: Path to external storage config JSON
-    
-    Returns:
-        Configured ContentProvider for production use
-    """
-    # Load external config if provided
-    external_config = {}
-    config_path = os.getenv("MOPS_EXTERNAL_CONFIG")
-    if config_path:
-        import json
-        with open(config_path) as f:
-            external_config = json.load(f)
-    
-    return OrasExternalProvider(
-        registry_url=os.getenv("MOPS_REGISTRY_URL"),
-        registry_auth=os.getenv("MOPS_REGISTRY_AUTH"),
-        external_config=external_config
-    )

@@ -23,7 +23,7 @@ class FakeProvider(ContentProvider):
     or external storage connections.
     """
     
-    def enumerate(
+    def iter_entries(
         self, 
         resolved: ResolvedBundle, 
         layers: list[str]

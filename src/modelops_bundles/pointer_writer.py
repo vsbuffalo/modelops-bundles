@@ -11,7 +11,6 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
@@ -114,12 +113,11 @@ def write_pointer_file(
         with open(temp_path, 'w', encoding='utf-8') as f:
             # Use canonical JSON serialization for determinism
             json.dump(
-                pointer.model_dump(),
+                pointer.model_dump(mode="json"),
                 f,
                 sort_keys=True,
                 separators=(',', ':'),
                 ensure_ascii=False,
-                default=_json_serializer
             )
             f.flush()
             os.fsync(f.fileno())
@@ -134,13 +132,6 @@ def write_pointer_file(
             temp_path.unlink()
         raise
 
-
-def _json_serializer(obj: Any) -> Any:
-    """Custom JSON serializer for datetime objects."""
-    if isinstance(obj, datetime):
-        # Produce RFC3339/ISO-8601 with Z suffix for UTC
-        return obj.isoformat().replace('+00:00', 'Z')
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
 def read_pointer_file(pointer_path: Path) -> PointerFile:

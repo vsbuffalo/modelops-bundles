@@ -395,7 +395,7 @@ def test_provider_duplicate_paths_rejected():
     from modelops_bundles.runtime_types import MatEntry
     
     class DuplicateProvider:
-        def enumerate(self, resolved, layers):
+        def iter_entries(self, resolved, layers):
             # Yield duplicate paths
             yield MatEntry(path="duplicate.txt", layer="code", kind="oras", content=b"first")
             yield MatEntry(path="other.txt", layer="code", kind="oras", content=b"other")
@@ -443,7 +443,7 @@ def test_duplicate_paths_across_layers():
     from modelops_bundles.runtime_types import MatEntry
     
     class CrossLayerDuplicateProvider:
-        def enumerate(self, resolved, layers):
+        def iter_entries(self, resolved, layers):
             # Same path from different layers
             yield MatEntry(path="shared.txt", layer="code", kind="oras", content=b"from code")
             yield MatEntry(path="shared.txt", layer="config", kind="oras", content=b"from config")
@@ -520,4 +520,91 @@ def test_different_roles_materialize_different_content(tmp_path):
     
     # Training role should have more files (includes data layer)
     # This is a rough check since we're using fake data
-    # In real implementation, would check specific layer content
+    assert len(training_files) >= len(runtime_files)
+
+
+def test_path_traversal_attacks_rejected(tmp_path):
+    """Test that materialize rejects dangerous paths that could escape destination."""
+    from modelops_bundles.runtime_types import MatEntry, ContentProvider
+    from modelops_contracts.artifacts import ResolvedBundle
+    from typing import Iterable
+    import pytest
+    
+    class EvilProvider(ContentProvider):
+        """Provider that yields dangerous paths."""
+        
+        def iter_entries(self, resolved: ResolvedBundle, layers: list[str]) -> Iterable[MatEntry]:
+            # Try various path traversal attacks
+            dangerous_paths = [
+                "../../outside.txt",     # Parent directory escape
+                "/etc/passwd",           # Absolute path
+                "../../../etc/passwd",   # Deep traversal
+                ".mops/metadata.json",   # Reserved metadata area
+            ]
+            
+            for path in dangerous_paths:
+                yield MatEntry(
+                    path=path,
+                    layer="code", 
+                    kind="oras",
+                    content=b"malicious content",
+                    uri=None,
+                    sha256=None,
+                    size=None,
+                    tier=None
+                )
+        
+        def fetch_external(self, entry: MatEntry) -> bytes:
+            return b"not used"
+    
+    ref = BundleRef(name="evil-bundle", version="1.0.0")
+    evil_provider = EvilProvider()
+    
+    # Each dangerous path should be rejected with ValueError
+    with pytest.raises(ValueError, match="unsafe entry path"):
+        materialize(ref, str(tmp_path), role="runtime", provider=evil_provider)
+
+
+def test_external_prefetch_honors_overwrite_rules(tmp_path):
+    """Test that prefetched external files respect overwrite/conflict rules."""
+    from modelops_bundles.runtime_types import MatEntry, ContentProvider
+    from modelops_contracts.artifacts import ResolvedBundle
+    from typing import Iterable
+    import pytest
+    
+    # Create existing file that will conflict
+    existing_file = tmp_path / "data.txt"
+    existing_file.write_text("existing content")
+    
+    class ExternalPrefetchProvider(ContentProvider):
+        """Provider that yields external entries for prefetch testing."""
+        
+        def iter_entries(self, resolved: ResolvedBundle, layers: list[str]) -> Iterable[MatEntry]:
+            yield MatEntry(
+                path="data.txt",
+                layer="data",
+                kind="external", 
+                content=None,
+                uri="az://test/data.txt",
+                sha256="a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+                size=12,
+                tier=None
+            )
+        
+        def fetch_external(self, entry: MatEntry) -> bytes:
+            return b"new content!"
+    
+    ref = BundleRef(name="test-bundle", version="1.0.0")
+    provider = ExternalPrefetchProvider()
+    
+    # Without overwrite=True, should detect conflict and raise WorkdirConflict
+    with pytest.raises(WorkdirConflict):
+        materialize(ref, str(tmp_path), role="runtime", provider=provider, 
+                   prefetch_external=True, overwrite=False)
+    
+    # With overwrite=True, should succeed and replace content
+    result = materialize(ref, str(tmp_path), role="runtime", provider=provider,
+                        prefetch_external=True, overwrite=True)
+    
+    # Verify file was replaced with new content
+    assert existing_file.read_text() == "new content!"

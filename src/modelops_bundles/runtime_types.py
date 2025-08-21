@@ -68,7 +68,7 @@ class ContentProvider(Protocol):
     (registry + external storage).
     """
     
-    def enumerate(
+    def iter_entries(
         self, 
         resolved: ResolvedBundle, 
         layers: list[str]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
@@ -18,6 +18,30 @@ from .pointer_writer import write_pointer_file
 from .runtime_types import ContentProvider, MatEntry
 
 __all__ = ["resolve", "materialize", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
+
+
+def _safe_relpath(p: str) -> str:
+    """
+    Validate and normalize entry paths to prevent traversal attacks.
+    
+    Rejects:
+    - Absolute paths
+    - Paths containing '..' components
+    - Paths starting with '.mops/' (reserved metadata area)
+    
+    Args:
+        p: Entry path from provider
+        
+    Returns:
+        Normalized relative path safe for use
+        
+    Raises:
+        ValueError: If path is unsafe
+    """
+    rel = PurePosixPath(p)
+    if rel.is_absolute() or ".." in rel.parts or str(rel).startswith(".mops/"):
+        raise ValueError(f"unsafe entry path: {p}")
+    return str(rel)
 
 
 # Exception Types
@@ -153,8 +177,12 @@ def materialize(
     # Select role using precedence rules
     selected_role = _select_role(resolved, ref, role)
     
-    # Get layers for the selected role
-    layer_names = resolved.get_role_layers(selected_role)
+    # Get layers for the selected role (direct dict access)
+    try:
+        layer_names = resolved.roles[selected_role]
+    except KeyError:
+        available = ", ".join(sorted(resolved.roles.keys()))
+        raise RoleLayerMismatch(f"Role '{selected_role}' not found in bundle. Available: {available}")
     
     # Validate that all layers referenced by the role exist in the manifest
     missing = [l for l in layer_names if l not in resolved.layers]
@@ -172,27 +200,32 @@ def materialize(
     
     # Use provider to enumerate all entries for the requested layers
     # Sort entries for deterministic order and detect duplicates
-    entries = sorted(provider.enumerate(resolved, layer_names), key=lambda e: e.path)
-    seen: set[str] = set()
+    entries = sorted(provider.iter_entries(resolved, layer_names), key=lambda e: e.path)
+    seen: dict[str, str] = {}  # path -> first layer that claimed it
     
     for entry in entries:
-        if entry.path in seen:
+        entry_path = _safe_relpath(entry.path)
+        if entry_path in seen:
             raise WorkdirConflict(
-                f"Duplicate materialization path: {entry.path}",
-                [{"path": entry.path, "error": "duplicate"}]
+                f"Duplicate materialization path: {entry_path}",
+                [{"path": entry_path, "first_layer": seen[entry_path], "duplicate_layer": entry.layer}]
             )
-        seen.add(entry.path)
-        target_path = dest_path / entry.path
+        seen[entry_path] = entry.layer
+        target_path = dest_path / entry_path
         
         if entry.kind == "oras":
             # Handle ORAS content
+            # MatEntry validation ensures content is present for ORAS entries
+            assert entry.content is not None
             _materialize_oras_file(
                 target_path, entry.content, overwrite, conflicts, dest_path
             )
         elif entry.kind == "external":
-            # Handle external storage reference using metadata from provider
+            # Handle external storage reference using metadata from provider  
+            # MatEntry validation ensures uri, sha256, size are present for external entries
             _materialize_external_file(
-                dest_path, entry, prefetch_external, provider
+                dest_path, entry, prefetch_external, provider,
+                overwrite=overwrite, conflicts=conflicts, base_dir=dest_path
             )
     
     # Check for conflicts
@@ -321,7 +354,11 @@ def _materialize_external_file(
     dest_path: Path,
     entry: MatEntry,
     prefetch_external: bool,
-    provider: ContentProvider
+    provider: ContentProvider,
+    *,
+    overwrite: bool,
+    conflicts: list[dict[str, str]],
+    base_dir: Path,
 ) -> None:
     """
     Create pointer file for external storage reference.
@@ -332,7 +369,19 @@ def _materialize_external_file(
         prefetch_external: Whether to also download the actual data
         provider: ContentProvider to fetch external content
     """
-    # Always create pointer file following canonical placement rule
+    # MatEntry validation ensures uri, sha256, size are non-None for external entries
+    assert entry.uri is not None
+    assert entry.sha256 is not None  
+    assert entry.size is not None
+    
+    # If prefetch_external=True, fetch and write actual content first
+    if prefetch_external:
+        actual_path = dest_path / entry.path
+        content = provider.fetch_external(entry)
+        # Use _materialize_oras_file for conflict detection and overwrite handling
+        _materialize_oras_file(actual_path, content, overwrite, conflicts, base_dir)
+    
+    # Write pointer file only after successful content write (if prefetching)
     write_pointer_file(
         dest_dir=dest_path,
         original_relpath=entry.path,
@@ -340,17 +389,10 @@ def _materialize_external_file(
         sha256=entry.sha256,
         size=entry.size,
         layer=entry.layer,
-        tier=entry.tier or "cool",
+        tier=entry.tier,  # Pass through as-is - tier is optional hint only
         fulfilled=prefetch_external,
         local_path=entry.path if prefetch_external else None
     )
-    
-    # If prefetch_external=True, fetch actual content from provider
-    if prefetch_external:
-        actual_path = dest_path / entry.path
-        actual_path.parent.mkdir(parents=True, exist_ok=True)
-        content = provider.fetch_external(entry)
-        _write_file_atomically(actual_path, content)
 
 
 def _write_file_atomically(target_path: Path, content: bytes) -> None:
