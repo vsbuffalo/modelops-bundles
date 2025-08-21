@@ -1,6 +1,10 @@
 """OCI Registry fixtures for testing using testcontainers."""
 import pytest
-from testcontainers.core.container import DockerContainer
+
+try:
+    from testcontainers.core.container import DockerContainer
+except ImportError:
+    DockerContainer = None
 
 
 @pytest.fixture(scope="session")
@@ -15,7 +19,15 @@ def oci_registry():
     Returns:
         str: Registry URL in format "host:port"
     """
-    with DockerContainer("registry:2") as container:
+    if DockerContainer is None:
+        pytest.skip("testcontainers not available")
+    
+    try:
+        container = DockerContainer("registry:2")
+    except Exception as e:
+        pytest.skip(f"Docker not available: {e}")
+        
+    with container:
         container.with_exposed_ports(5000)
         container.start()
         

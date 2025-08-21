@@ -15,13 +15,14 @@ data). The runtime surface is minimal and explicit:
 
 ```python
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
+from modelops_bundles.runtime_types import ContentProvider
 
 def resolve(ref: BundleRef, *, cache: bool = True) -> ResolvedBundle: ...
-def materialize(ref: BundleRef, dest: str, *, role: str | None = None, overwrite: bool = False, prefetch_external: bool = False) -> ResolvedBundle: ...
+def materialize(ref: BundleRef, dest: str, *, role: str | None = None, overwrite: bool = False, prefetch_external: bool = False, provider: ContentProvider) -> ResolvedBundle: ...
 ```
 
 - **`resolve`**: turn a logical reference (`bundle:version`, digest, or local path) into a reproducible object with manifest + content addresses (no filesystem side‑effects beyond optional cache priming).
-- **`materialize`**: _mirror_ exactly the layers required for a **role** into a target directory (workdir), with optional **lazy** external data. This is the seam the rest of ModelOps uses, both locally and in-cluster.
+- **`materialize`**: _mirror_ exactly the layers required for a **role** into a target directory (workdir), with optional **lazy** external data. Uses dependency injection via ContentProvider to stay pure and testable. This is the seam the rest of ModelOps uses, both locally and in-cluster.
 
 Why this shape?
 - Aligns with the **contracts-first** architecture (`modelops-contracts` defines the types).
@@ -164,7 +165,7 @@ We retain a simple **scan → plan → publish** pipeline to keep the push path 
 
 It decouples **identity** (planning, audit, policy) from **filesystem side-effects**. The rest of ModelOps can attach metadata (e.g., provenance in `EvalRequest.provenance`) using only the digest from `resolve()`. Since `resolve()` has no side-effects beyond optional directory creation, it's safe to call repeatedly in schedulers/heads for planning.
 
-### 4.2 `materialize(ref, dest, role=None, overwrite=False, prefetch_external=False) -> ResolvedBundle`
+### 4.2 `materialize(ref, dest, role=None, overwrite=False, prefetch_external=False, provider=ContentProvider) -> ResolvedBundle`
 
 **Role Selection Process:**
 Role is selected using this precedence (highest → lowest priority):
@@ -180,9 +181,9 @@ Role is selected using this precedence (highest → lowest priority):
 - If both function arg and `ref.role` are present, function arg wins silently (no warning)
 
 **Content Materialization:**
-- Pull **only** the layers needed for the selected `role`
+- Pull **only** the layers needed for the selected `role` via the provided ContentProvider
 - For ORAS content: write files under `dest/…`. If a **node cache** exists, use hardlinks/symlinks to avoid copying
-- For external blobs: behavior is **lazy-by-default**. Write tiny pointer files (JSON) with `{uri, sha256, size, tier}`. Calabaria's data loader can call a helper to fetch on demand. Optional `prefetch_external=True` downloads immediately **to the workdir** (not the cache)
+- For external blobs: behavior is **lazy-by-default**. Write tiny pointer files (JSON) with `{uri, sha256, size, tier}` from provider metadata. Calabaria's data loader can call a helper to fetch on demand. Optional `prefetch_external=True` downloads immediately **to the workdir** (not the cache) via `provider.fetch_external()`
 - Populate `.mops-manifest.json` in `dest` for provenance
 - Return the same `ResolvedBundle` (same identity) so callers can pass it forward without re-resolving
 
@@ -264,7 +265,7 @@ rb = resolve(ref)                                  # Works on laptop or in K8s
 rb = materialize(ref, dest="/workspace", role="sim")  # Cloud workers use this to fetch only what they need
 ```
 
-### 4.4 Pull Semantics: Role-Aware with Prefetch Options
+### 4.5 Pull Semantics: Role-Aware with Prefetch Options
 
 The CLI `pull` command respects the same role-based materialization as the runtime API:
 
@@ -289,7 +290,7 @@ modelops bundles pull epi-abm:latest --role sim --dest ./work --prefetch-externa
 - Lazy loading saves time and bandwidth for data that may never be accessed
 - Prefetch useful for offline work or when external storage has high latency
 
-### 4.5 Pointer File Layout
+### 4.6 Pointer File Layout
 
 When `materialize()` encounters external blobs, it writes **pointer files**
 instead of downloading the actual data (unless `prefetch_external=True`).
@@ -372,7 +373,7 @@ data/foo.bin.json, alongside the actual data file). Why?
    appended, scoped under `.mops/ptr/....`
 
 
-### 4.6 Layers vs Roles: Complementary Concepts
+### 4.7 Layers vs Roles: Complementary Concepts
 
 **Layers and roles are not the same thing** — they serve different purposes:
 
@@ -413,7 +414,7 @@ mat = materialize(rb, dest="/work/sim", role="runtime")
 - Roles provide task-appropriate materialization
 - Workers pull only what they need, keeping pods lean and startup fast
 
-### 4.7 Role Selection Algorithm
+### 4.8 Role Selection Algorithm
 
 **Goal:** Determine which role's layers to materialize when multiple signals exist.
 
@@ -458,9 +459,194 @@ No role specified and no default role in manifest. Available: runtime, training,
 Role 'sim' references non-existent layers: ['missing-layer']
 ```
 
+## 4.9) ContentProvider Abstraction
+
+### Purpose
+
+The `materialize()` function's job is **filesystem side-effects only**: pick a role, enforce overwrite semantics, write files atomically, and create pointer files under `.mops/ptr/**`. It must not know how to talk to an OCI/ORAS registry, Azure/S3, or a local working tree.
+
+ContentProvider owns content enumeration and retrieval for a set of layers:
+- For ORAS items, it yields the final relative path and the file bytes
+- For external items, it yields the final relative path plus the pointer metadata (uri, sha256, size, tier). Optionally, it can fetch the external bytes if prefetch is requested
+
+This keeps runtime pure and deterministic while letting storage strategies evolve.
+
+### Responsibility Split
+
+| Concern                                                   | Runtime (`materialize`) | ContentProvider |
+|-----------------------------------------------------------|-------------------------|-----------------|
+| Role selection precedence (arg > ref.role > default > err)| ✅                       | —               |
+| Validate role exists / layers present                     | ✅                       | —               |
+| Idempotency & conflict detection (CREATED/UNCHANGED/…)    | ✅                       | —               |
+| Atomic writes, fsync, `os.replace`                        | ✅                       | —               |
+| Pointer placement under `.mops/ptr/**`                    | ✅                       | —               |
+| Enumerate entries for layers (paths, kinds)               | —                       | ✅               |
+| Provide ORAS file bytes                                   | —                       | ✅               |
+| Provide external metadata (uri/sha256/size/tier)          | —                       | ✅               |
+| Prefetch external bytes                                   | —                       | ✅ (`fetch_external`) |
+| Auth, retries, backoff, parallelism                       | —                       | ✅ (impl detail) |
+| Caching (Stage 2+)                                        | —                       | ✅ (impl detail) |
+
+### MatEntry: The Bridge Type
+
+ContentProvider yields `MatEntry` objects that carry all necessary information for materialization:
+
+```python
+@dataclass(frozen=True, slots=True)
+class MatEntry:
+    path: str          # "src/model.py" (POSIX-style relative path)
+    layer: str         # "code", "data", etc.
+    kind: Kind         # "oras" | "external"
+    content: bytes | None  # bytes for oras; None for external
+    # External-only metadata (required when kind=="external")
+    uri: str | None = None        # "az://container/path"
+    sha256: str | None = None     # 64-hex, no 'sha256:' prefix
+    size: int | None = None       # Size in bytes
+    tier: str | None = None       # "hot" | "cool" | "archive"
+```
+
+### ContentProvider Protocol
+
+```python
+class ContentProvider(Protocol):
+    def enumerate(
+        self, 
+        resolved: ResolvedBundle, 
+        layers: list[str]
+    ) -> Iterable[MatEntry]:
+        """Enumerate all entries for the requested layers."""
+        ...
+    
+    def fetch_external(self, entry: MatEntry) -> bytes:
+        """Fetch external content when prefetch_external=True."""
+        ...
+```
+
+### Design Benefits
+
+1. **Runtime Purity**: `materialize()` contains zero registry/storage-specific code
+2. **Testability**: Tests inject `FakeProvider` with deterministic content
+3. **Evolution**: New storage backends just implement ContentProvider
+4. **Separation**: Storage complexity is isolated from filesystem operations
+
+### Implementation Notes
+
+- **ContentProvider is a runtime extension point, not a contract type**. Tests must inject a fake provider; production uses an ORAS+External provider.
+- **Storage layer**: ContentProviders use the Storage Abstractions (Section 4.10) to interact with ORAS registries and external storage systems.
+- **Deterministic behavior**: Runtime sorts entries by path and detects duplicates
+- **Atomic operations**: All file writes use temp file + `os.replace()` pattern
+- **Provider responsibilities**: Auth, retries, caching are implementation details hidden from runtime
+
 ---
 
-## 5) Minimal Cache (kept from old system)
+## 4.10) Storage Abstractions (runtime–provider seam)
+
+To keep the runtime pure and testable, storage concerns are factored behind two
+minimal interfaces. Providers use these interfaces; the runtime never speaks to
+SDKs directly.
+
+### Interfaces 
+```python
+# modelops_bundles/storage/base.py
+from dataclasses import dataclass
+from typing import Protocol, Optional
+
+@dataclass(frozen=True)
+class ExternalStat:
+    uri: str           # e.g., "az://bucket/path/file.parquet"
+    size: int          # bytes
+    sha256: str        # 64 hex (no 'sha256:' prefix)
+    tier: Optional[str] = None  # "hot" | "cool" | "archive" (hint only)
+
+class OrasStore(Protocol):
+    def blob_exists(self, digest: str) -> bool: ...
+    def get_blob(self, digest: str) -> bytes: ...
+    def put_blob(self, digest: str, data: bytes) -> None: ...
+    def get_manifest(self, digest_or_ref: str) -> bytes: ...
+    def put_manifest(self, media_type: str, payload: bytes) -> str: ...
+    # Returns digest of stored manifest
+
+class ExternalStore(Protocol):
+    def stat(self, uri: str) -> ExternalStat: ...
+    def get(self, uri: str) -> bytes: ...
+    def put(self, uri: str, data: bytes, *, sha256: Optional[str]=None) -> ExternalStat: ...
+```
+
+### Design notes
+- ExternalStat exists so the provider can create pointer files without downloading bytes.
+- tier is persisted in pointer JSON as a hint only; it does not affect runtime behavior. The runtime never branches on tier value.
+- Interfaces are intentionally small; retries/auth/parallelism are implementation details.
+
+### ExternalStat Contract
+- **sha256**: Must be exactly 64 lowercase hex characters (no 'sha256:' prefix)
+- **size**: Must be exact byte count (no approximations allowed)
+- **Failure semantics**: If ExternalStore.stat() fails, it must raise an exception (never return None)
+
+### ExternalStore.put() Contract
+- **SHA256 validation**: If caller provides sha256 parameter that disagrees with computed hash of data, must raise ValueError
+- **Return value**: Always returns ExternalStat with computed hash, actual size, and provided tier
+
+### Provider responsibilities vs runtime 
+
+| Concern | Runtime | Provider |
+|---------|---------|----------|
+| Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via OrasStore/ExternalStore |
+| Authentication/credentials | ❌ Never | ✅ Implementation detail |
+| Network retries/timeouts | ❌ Never | ✅ Implementation detail |
+| Content enumeration | ❌ Never | ✅ Via ContentProvider.enumerate() |
+| Filesystem operations | ✅ Atomic writes | ❌ Never |
+| Pointer file placement | ✅ Canonical rules | ❌ Never |
+
+### Canonical fakes (for tests and examples)
+
+To enable fast, deterministic tests and examples, we provide in-memory fakes next to the interfaces:
+```
+modelops_bundles/storage/
+  base.py          # protocols & ExternalStat
+  fakes/
+    fake_oras.py
+    fake_external.py
+```
+
+**Why co-locate fakes with protocols?**
+
+- **Drift control**: When someone edits the protocols ExternalStore/OrasStore, the fake breaks in the same module tree—forcing updates and keeping the seam honest.
+- **Reusability**: Other packages (CLI, runners) can import the fakes for their unit tests without re-inventing fixtures.
+- **Type-safety**: The fake imports the exact protocol types (no circular test-import hacks).
+- **Deterministic tests**: In-memory storage lets us test runtime/provider logic with zero external deps.
+
+**Packaging concerns addressed:**
+- They are not part of the production surface (excluded from distribution).
+- Rationale: keep doubles co-located with the seam so interface changes break the fakes in CI, preventing drift.
+- Other repos (CLI, runners) can import the fakes in their tests for end-to-end exercises without real SDKs.
+
+**Drift control requirement:**
+All in-tree fakes explicitly subclass their Protocols, so any interface change breaks CI immediately and prevents silent drift.
+
+**Packaging guidance:** exclude `storage/fakes/**` from release wheels via:
+```toml
+# pyproject.toml
+[tool.setuptools.packages.find]
+exclude = ["modelops_bundles.storage.fakes*"]
+```
+Import only in test code.
+
+### Interaction with roles/layers
+- Roles select a set of layer names from the manifest.
+- The provider enumerates entries for those layers:
+  - ORAS entries provide bytes.
+  - External entries are populated via ExternalStore.stat() with uri/sha256/size (and optional tier).
+- Runtime writes pointer JSON using that metadata; if prefetch_external=True, it calls provider get() to fetch bytes.
+
+### Pointer schema invariants (recap)
+- Pointer files are placed at: `dest/.mops/ptr/<original_dir>/<filename>.json`
+- Required fields: uri, sha256, size, original_path, layer
+- Optional: tier
+- Behavioral contract: tier is recorded only; no behavioral changes implied.
+
+---
+
+## 5) Minimal Cache 
 
 **Cache Structure:**
 - **Where**: `~/.modelops/bundles/<manifest-digest>/layers/<layer-id>/…`
@@ -469,7 +655,7 @@ Role 'sim' references non-existent layers: ['missing-layer']
 - **Lifecycle**: Created by `resolve()` (directory structure only), populated by `materialize()`
 
 **Cache Behavior:**
-- `resolve(..., cache=True)`: May create `~/.modelops/bundles/<manifest-digest>/` directory (empty)
+- `resolve(..., cache=True)`: May create `~/.modelops/bundles/<manifest-digest>/` directory (empty). No blobs are downloaded in resolve(), even if cache=True.
 - `materialize(...)`: Downloads ORAS blobs to cache, then hardlinks/symlinks to destination
 - **How**: File locks per `<manifest-digest>`; SHA-256 verified on first write; reused thereafter
 - **Why**: Massive reduction in cold-start time and network traffic, especially for many short trials
@@ -573,6 +759,8 @@ Output:
 ]
 ```
 
+**Note:** External URIs in `plan --external-preview` output are only included if they are resolvable via ExternalStore.stat(), not "guessed" or generated URIs.
+
 **JSON Output Support:**
 All commands support `--json` flag for structured output, enabling automation and CI/CD integration.
 
@@ -642,6 +830,12 @@ Standardized error handling for robust automation:
 - **Exit code 10**: `UnsupportedMediaType` — Unknown or unsupported media type
 - **Exit code 11**: `RoleLayerMismatch` — Role references non-existent layer
 - **Exit code 12**: `WorkdirConflict` — Target files exist with different checksums (materialize conflict)
+
+### 9.1.1 BundleNotFoundError Semantics
+
+- **Raised in resolve()**: When registry/local lookup fails for the specified bundle reference
+- **Raised in materialize()**: When the underlying resolve() call fails (bubbles up from resolve())
+- **Triggers**: Invalid bundle name/version, missing digest, unreachable local path, registry authentication failures
 
 **Actionable error messages** with hints:
 ```
@@ -774,11 +968,13 @@ modelops bundles pull epi-abm:latest --role sim --dest ./work --prefetch-externa
 ```python
 from modelops_contracts.artifacts import BundleRef
 from modelops_bundles.runtime import resolve, materialize
+from modelops_bundles.providers.oras_external import default_provider_from_env
 
 # Runtime API - same everywhere
 ref = BundleRef(name="epi-abm", version="2.2.1", role="sim")
+provider = default_provider_from_env()              # get provider from environment config
 rb = resolve(ref)                                    # fetch manifest, maybe prime cache
-rb = materialize(ref, dest="/workspace", role="sim") # mirror to FS (ORAS files + external pointers)
+rb = materialize(ref, dest="/workspace", role="sim", provider=provider) # mirror to FS
 # → run Calabaria tasks in /workspace
 ```
 
@@ -1188,7 +1384,24 @@ Exit code: 11
 **Layer Identity:**
 - For each layer, build a canonical JSON array of entries:
   ```json
-  [{"path": "...", "mode": 420, "size": 123, "sha256": "..."}, ...]
+  [
+    {
+      "path": "src/model.py",
+      "mode": 420,
+      "size": 2048,
+      "sha256": "abc123def456789...",
+      "type": "oras"
+    },
+    {
+      "path": "data/large.parquet", 
+      "mode": 420,
+      "size": 2247583616,
+      "sha256": "xyz789abc123def...",
+      "type": "external",
+      "uri": "az://epidata/large.parquet",
+      "tier": "cool"
+    }
+  ]
   ```
 - Sorted by path (UTF-8 byte order)
 - Encoded as JSON with:
@@ -1249,7 +1462,7 @@ Exit code: 11
 **Path normalization:**
 - Forward slashes only; no `.` or `..` segments; NFC normalization
 
-**Compression:** zstd at a fixed level (e.g., level=19) to balance size/speed deterministically.
+**Compression:** zstd at a fixed level (e.g., level=19) to balance size/speed deterministically. Use zstd standard library at fixed level; no custom dictionary in MVP. zstd version must be pinned to ensure byte-identical output across systems.
 
 **Chunking/streaming:** Stream in sorted order; do not parallelize writes (parallel chunk order breaks determinism).
 

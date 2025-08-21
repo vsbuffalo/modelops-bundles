@@ -6,6 +6,8 @@ import hashlib
 from pathlib import Path
 from typing import Dict, Tuple, Any
 
+# Note: oci_registry fixture is autodiscovered from tests/fixtures/oci_registry.py
+
 # Import oras client for testing
 try:
     import oras.client

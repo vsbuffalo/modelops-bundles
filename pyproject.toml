@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.40.14",
+    "modelops-contracts",
     "pytest>=8.4.1",
     "rich>=14.1.0",
     "testcontainers[registry]>=4.12.0",
@@ -21,3 +22,6 @@ dev = [
     "httpx>=0.28.1",
     "oras>=0.2.37",
 ]
+
+[tool.uv.sources]
+modelops-contracts = { path = "../modelops-contracts" }
