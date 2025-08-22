@@ -1,8 +1,8 @@
 """
-Tests for OrasExternalProvider.
+Tests for BundleContentProvider.
 
 These tests verify that the provider correctly converts bundle metadata from 
-ORAS layer indexes into MatEntry objects, with comprehensive error handling.
+bundle registry layer indexes into MatEntry objects, with comprehensive error handling.
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import hashlib
 import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
-from modelops_bundles.providers.oras_external import OrasExternalProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeOrasStore
+from modelops_bundles.providers.bundle_content import BundleContentProvider
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
 from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime_types import MatEntry
 
@@ -56,13 +56,13 @@ def _mk_resolved_with_indexes(code_idx: str | None = None, data_idx: str | None 
 
 
 class TestIterEntries:
-    """Test OrasExternalProvider.iter_entries method."""
+    """Test BundleContentProvider.iter_entries method."""
     
     def test_emits_oras_and_external_entries(self):
         """Test happy path: yields both ORAS and external entries."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Seed ORAS blobs for code files
         code_file_1 = b"print('hello')\n"
@@ -119,9 +119,9 @@ class TestIterEntries:
 
     def test_missing_layer_index_raises(self):
         """Test that missing layer in layer_indexes raises clear error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Only code index exists; 'data' is missing from layer_indexes
         code_idx_payload = _layer_index_doc([])
@@ -133,9 +133,9 @@ class TestIterEntries:
 
     def test_missing_index_manifest_raises(self):
         """Test that missing index manifest in ORAS raises clear error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Reference a digest that doesn't exist in ORAS
         fake_digest = "sha256:" + "b" * 64
@@ -146,9 +146,9 @@ class TestIterEntries:
 
     def test_invalid_media_type_raises(self):
         """Test that wrong mediaType in index raises clear error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Create an index with wrong mediaType
         bad_payload = json.dumps({
@@ -163,9 +163,9 @@ class TestIterEntries:
 
     def test_invalid_json_raises(self):
         """Test that malformed JSON in index raises clear error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()  
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Store malformed JSON as manifest
         bad_json = b"{ invalid json }"
@@ -180,9 +180,9 @@ class TestIterEntries:
 
     def test_entry_missing_path_raises(self):
         """Test that entry without path raises clear error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         malformed_payload = _layer_index_doc([
             {"digest": "sha256:" + "c"*64, "layer": "code"}  # missing path
@@ -195,9 +195,9 @@ class TestIterEntries:
 
     def test_entry_layer_mismatch_raises(self):
         """Test that entry with wrong layer field raises error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         malformed_payload = _layer_index_doc([
             {"path": "src/model.py", "digest": "sha256:" + "c"*64, "layer": "wrong"}
@@ -210,9 +210,9 @@ class TestIterEntries:
 
     def test_entry_missing_both_digest_and_external_raises(self):
         """Test that entry missing both digest and external raises error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         malformed_payload = _layer_index_doc([
             {"path": "oops/no_source.txt", "layer": "code"}
@@ -225,9 +225,9 @@ class TestIterEntries:
 
     def test_entry_has_both_digest_and_external_raises(self):
         """Test that entry with both digest and external raises error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         malformed_payload = _layer_index_doc([
             {
@@ -245,9 +245,9 @@ class TestIterEntries:
 
     def test_missing_oras_blob_raises(self):
         """Test that missing ORAS blob raises friendly error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Reference a digest that doesn't exist in ORAS blobs
         missing_digest = "sha256:" + "f"*64
@@ -262,9 +262,9 @@ class TestIterEntries:
 
     def test_external_entry_missing_required_fields_raises(self):
         """Test that external entry missing uri/sha256/size raises error."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Missing uri and size
         malformed_payload = _layer_index_doc([
@@ -282,9 +282,9 @@ class TestIterEntries:
 
     def test_external_tier_optional(self):
         """Test that external tier field is optional."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # External without tier
         payload = _layer_index_doc([
@@ -303,9 +303,9 @@ class TestIterEntries:
 
     def test_external_sha_format_enforced_by_matentry(self):
         """Test that provider propagates bad SHA256 that gets caught by MatEntry validation."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Invalid SHA256 (not hex)
         bad_sha = "zzzz" * 16  # 64 chars but not hex

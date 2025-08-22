@@ -135,9 +135,9 @@ def _add_entries_to_tar(tar: tarfile.TarFile, src_path: Path, include_external: 
             if rel in pointer_targets:
                 continue
             
-        # Validate path safety
+        # Validate path safety for archive creation
         try:
-            safe_relpath(arcname)
+            _validate_archive_path(arcname)
         except ValueError as e:
             raise ValueError(f"Unsafe archive path {arcname}: {e}")
         
@@ -188,10 +188,10 @@ def _iter_entries_sorted(src_dir: Path) -> Iterator[Tuple[Path, str]]:
 
 def normalize_relpath(path: str) -> str:
     """
-    Normalize relative path for Windows compatibility.
+    Normalize relative path for archive creation.
     
-    Converts backslashes to forward slashes and validates the result
-    contains no unsafe sequences.
+    Converts backslashes to forward slashes and applies basic safety validation.
+    Unlike safe_relpath, this allows .mops paths since they contain valid metadata.
     
     Args:
         path: Relative path to normalize
@@ -207,10 +207,38 @@ def normalize_relpath(path: str) -> str:
     if normalized.startswith("./"):
         normalized = normalized[2:]
     
-    # Validate normalized path
-    safe_relpath(normalized)
+    # Apply basic safety validation (but allow .mops paths)
+    _validate_archive_path(normalized)
     
     return normalized
+
+def _validate_archive_path(path: str) -> None:
+    """
+    Validate path is safe for archive creation.
+    
+    This is more permissive than safe_relpath since it allows .mops paths
+    which are needed for metadata in archives.
+    
+    Args:
+        path: Path to validate
+        
+    Raises:
+        ValueError: If path contains dangerous sequences
+    """
+    from pathlib import PurePosixPath
+    
+    rel = PurePosixPath(path)
+    s = str(rel)
+    
+    # Basic safety checks
+    if not s or s == ".":
+        raise ValueError(f"unsafe archive path: {path}")
+    if "\\" in s:
+        raise ValueError(f"unsafe archive path: {path}")
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"unsafe archive path: {path}")
+    
+    # Note: We allow .mops paths for metadata in archives
 
 def _apply_canonical_headers(tarinfo: tarfile.TarInfo) -> None:
     """

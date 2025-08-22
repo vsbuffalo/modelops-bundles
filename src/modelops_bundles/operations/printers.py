@@ -30,8 +30,15 @@ def print_resolved_bundle(bundle: ResolvedBundle) -> None:
     Args:
         bundle: Resolved bundle to display
     """
+    # Format bundle label defensively
+    label = (
+        f"{bundle.ref.name}:{bundle.ref.version}"
+        if bundle.ref.name and bundle.ref.version
+        else bundle.manifest_digest[:18] + "…"
+    )
+    
     if _RICH:
-        _console.print(f"[bold]Bundle:[/] {bundle.ref.name}:{bundle.ref.version}")
+        _console.print(f"[bold]Bundle:[/] {label}")
         _console.print(f"[bold]Manifest:[/] [dim]{bundle.manifest_digest}[/]")
         _console.print(f"[bold]Size:[/] {_format_bytes(bundle.total_size)}")
         
@@ -51,7 +58,7 @@ def print_resolved_bundle(bundle: ResolvedBundle) -> None:
     
     # Fallback to plain text
     typer.echo(f"Manifest: {bundle.manifest_digest}")
-    typer.echo(f"Bundle: {bundle.ref.name}:{bundle.ref.version}")
+    typer.echo(f"Bundle: {label}")
     typer.echo(f"Size: {_format_bytes(bundle.total_size)}")
     
     if bundle.roles:
@@ -71,9 +78,28 @@ def print_materialize_summary(bundle: ResolvedBundle, dest: str, role: str) -> N
         dest: Destination directory
         role: Role that was materialized
     """
-    typer.echo(f"Materialized {bundle.ref.name}:{bundle.ref.version} to {dest}")
+    # Format bundle label defensively
+    label = (
+        f"{bundle.ref.name}:{bundle.ref.version}"
+        if bundle.ref.name and bundle.ref.version
+        else bundle.manifest_digest[:18] + "…"
+    )
+    
+    typer.echo(f"Materialized {label} to {dest}")
     typer.echo(f"Role: {role}")
-    typer.echo(f"Layers: {', '.join(bundle.roles[role])}")
+    
+    # Guard against unknown/missing roles
+    if role in bundle.roles:
+        layers = bundle.roles[role]
+        typer.echo(f"Layers: {', '.join(layers)}")
+    elif role == "unknown":
+        if bundle.roles:
+            available_roles = list(bundle.roles.keys())
+            typer.echo(f"Available roles: {', '.join(available_roles)}")
+        else:
+            typer.echo("No roles defined in bundle")
+    else:
+        typer.echo(f"Role '{role}' not found in bundle")
 
 def print_export_summary(src_dir: str, out_path: str, include_external: bool) -> None:
     """

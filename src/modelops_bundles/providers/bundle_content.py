@@ -1,7 +1,7 @@
 """
 ContentProvider implementation using storage interfaces.
 
-This module provides the ORAS+External ContentProvider that uses
+This module provides the BundleContentProvider that uses
 storage interfaces for registry and external storage operations.
 """
 from __future__ import annotations
@@ -12,10 +12,10 @@ from typing import Iterable
 from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
 from ..runtime_types import ContentProvider, MatEntry
-from ..storage.base import ExternalStore, OrasStore
+from ..storage.base import ExternalStore, BundleRegistryStore
 from ..path_safety import safe_relpath
 
-__all__ = ["OrasExternalProvider", "default_provider_from_env"]
+__all__ = ["BundleContentProvider", "default_provider_from_env"]
 
 
 def _short_digest(digest: str) -> str:
@@ -25,9 +25,9 @@ def _short_digest(digest: str) -> str:
     return digest
 
 
-class OrasExternalProvider(ContentProvider):
+class BundleContentProvider(ContentProvider):
     """
-    ContentProvider that uses storage interfaces for ORAS and external operations.
+    ContentProvider that uses storage interfaces for bundle registry and external operations.
     
     This provider accepts storage implementations via dependency injection,
     enabling testing with fakes and production use with real implementations.
@@ -35,15 +35,15 @@ class OrasExternalProvider(ContentProvider):
     Stage 2: Constructor accepts stores, iter_entries() is implemented in Stage 3.
     """
     
-    def __init__(self, *, oras: OrasStore, external: ExternalStore) -> None:
+    def __init__(self, *, registry: BundleRegistryStore, external: ExternalStore) -> None:
         """
         Initialize the provider with storage interfaces.
         
         Args:
-            oras: ORAS storage interface for registry operations
+            registry: Bundle registry storage interface for registry operations
             external: External storage interface for blob operations
         """
-        self._oras = oras
+        self._registry = registry
         self._external = external
     
     def iter_entries(
@@ -75,7 +75,7 @@ class OrasExternalProvider(ContentProvider):
             # 2. Fetch and validate index
             index_digest = resolved.layer_indexes[layer]
             try:
-                payload = self._oras.get_manifest(index_digest)
+                payload = self._registry.get_manifest(index_digest)
             except KeyError:
                 raise ValueError(f"missing index manifest {_short_digest(index_digest)} for layer '{layer}'")
             
@@ -144,7 +144,7 @@ class OrasExternalProvider(ContentProvider):
                         raise ValueError(f"invalid digest format for layer '{layer}' path '{path}': contains non-hex characters")
                     
                     try:
-                        blob = self._oras.get_blob(digest)
+                        blob = self._registry.get_blob(digest)
                     except KeyError:
                         raise ValueError(f"missing blob {_short_digest(digest)} for layer '{layer}' path '{path}'")
                     
@@ -175,16 +175,16 @@ class OrasExternalProvider(ContentProvider):
         return self._external.get(entry.uri)
 
 
-def default_provider_from_env() -> OrasExternalProvider:
+def default_provider_from_env() -> BundleContentProvider:
     """
-    Create OrasExternalProvider with real adapters from environment settings.
+    Create BundleContentProvider with real adapters from environment settings.
     
     This is the standard entry point for production use and CLI integration.
     Loads settings from environment variables and creates real ORAS and 
     external storage adapters.
     
     Returns:
-        OrasExternalProvider configured with real adapters
+        BundleContentProvider configured with real adapters
         
     Raises:
         ValueError: If required configuration is missing
@@ -204,8 +204,8 @@ def default_provider_from_env() -> OrasExternalProvider:
     oras_adapter = OrasAdapter(settings=settings)
     external_adapter = AzureExternalAdapter(settings=settings)
     
-    return OrasExternalProvider(
-        oras=oras_adapter,
+    return BundleContentProvider(
+        registry=oras_adapter,
         external=external_adapter
     )
 

@@ -10,15 +10,15 @@ import pytest
 
 from modelops_bundles.storage.base import ExternalStat
 from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
-from modelops_bundles.storage.fakes.fake_oras import FakeOrasStore
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
-class TestFakeOrasStore:
-    """Test FakeOrasStore implementation."""
+class TestFakeBundleRegistryStore:
+    """Test FakeBundleRegistryStore implementation."""
     
     def test_put_get_blob_roundtrip(self) -> None:
         """Test storing and retrieving blobs."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         digest = "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
         data = b"test blob content"
         
@@ -34,7 +34,7 @@ class TestFakeOrasStore:
     
     def test_put_get_manifest_roundtrip(self) -> None:
         """Test storing and retrieving manifests."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         media_type = "application/vnd.oci.image.manifest.v1+json"
         payload = b'{"test": "manifest"}'
         
@@ -49,14 +49,14 @@ class TestFakeOrasStore:
     
     def test_blob_exists_false_for_missing(self) -> None:
         """Test blob_exists returns False for missing blobs."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         digest = "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
         
         assert not store.blob_exists(digest)
     
     def test_get_blob_raises_keyerror_for_missing(self) -> None:
         """Test get_blob raises KeyError for missing blobs."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         digest = "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
         
         with pytest.raises(KeyError, match=digest):
@@ -64,7 +64,7 @@ class TestFakeOrasStore:
     
     def test_get_manifest_raises_keyerror_for_missing(self) -> None:
         """Test get_manifest raises KeyError for missing manifests."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         digest_or_ref = "sha256:missing"
         
         with pytest.raises(KeyError, match=digest_or_ref):
@@ -72,7 +72,7 @@ class TestFakeOrasStore:
     
     def test_put_blob_invalid_digest_raises_valueerror(self) -> None:
         """Test put_blob raises ValueError for invalid digest format."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         data = b"test data"
         
         # Test various invalid formats
@@ -90,7 +90,7 @@ class TestFakeOrasStore:
     
     def test_clear_removes_all_data(self) -> None:
         """Test clear utility method."""
-        store = FakeOrasStore()
+        store = FakeBundleRegistryStore()
         digest = "sha256:a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
         data = b"test data"
         
@@ -220,11 +220,11 @@ class TestProtocolCompliance:
     """Test that fakes properly implement their protocols."""
     
     def test_fake_oras_subclasses_protocol(self) -> None:
-        """Verify FakeOrasStore subclasses OrasStore for drift control."""
-        from modelops_bundles.storage.base import OrasStore
+        """Verify FakeBundleRegistryStore subclasses BundleRegistryStore for drift control."""
+        from modelops_bundles.storage.base import BundleRegistryStore
         
-        store = FakeOrasStore()
-        assert isinstance(store, OrasStore)
+        store = FakeBundleRegistryStore()
+        assert isinstance(store, BundleRegistryStore)
     
     def test_fake_external_subclasses_protocol(self) -> None:
         """Verify FakeExternalStore subclasses ExternalStore for drift control."""
@@ -238,22 +238,22 @@ class TestIntegrationWithProvider:
     """Test that providers can be constructed with fakes."""
     
     def test_provider_construction_with_fakes(self) -> None:
-        """Test OrasExternalProvider can be constructed with fakes."""
-        from modelops_bundles.providers.oras_external import OrasExternalProvider
+        """Test BundleContentProvider can be constructed with fakes."""
+        from modelops_bundles.providers.bundle_content import BundleContentProvider
         
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
         
         # Should construct without errors
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Verify stores are accessible (implementation detail, but good for testing)
-        assert provider._oras is oras
+        assert provider._registry is oras
         assert provider._external is external
     
     def test_provider_fetch_external_uses_store(self) -> None:
         """Test that provider.fetch_external delegates to external store."""
-        from modelops_bundles.providers.oras_external import OrasExternalProvider
+        from modelops_bundles.providers.bundle_content import BundleContentProvider
         from modelops_bundles.runtime_types import MatEntry
         
         # Set up fake store with data
@@ -263,8 +263,8 @@ class TestIntegrationWithProvider:
         external.put(uri, data)
         
         # Create provider
-        oras = FakeOrasStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        oras = FakeBundleRegistryStore()
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Create MatEntry for external content (use proper SHA256 format)
         import hashlib
@@ -286,12 +286,12 @@ class TestIntegrationWithProvider:
     
     def test_provider_fetch_external_missing_uri_raises(self) -> None:
         """Test fetch_external raises ValueError for entry without URI."""
-        from modelops_bundles.providers.oras_external import OrasExternalProvider
+        from modelops_bundles.providers.bundle_content import BundleContentProvider
         from modelops_bundles.runtime_types import MatEntry
         
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
         
         # Since MatEntry validation prevents creating entries with missing URI,
         # we'll create a valid entry and then manually set URI to None

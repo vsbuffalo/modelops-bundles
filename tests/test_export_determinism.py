@@ -15,8 +15,7 @@ from pathlib import Path
 import pytest
 
 from modelops_bundles.export import (
-    write_deterministic_archive, normalize_relpath, _apply_canonical_headers,
-    _is_external_data_file
+    write_deterministic_archive, normalize_relpath, _apply_canonical_headers
 )
 
 
@@ -65,27 +64,33 @@ class TestDeterministicExport:
         assert archive1.read_bytes() == archive2.read_bytes()
 
     def test_external_data_filtering(self, tmp_path):
-        """Test that external data files are filtered correctly."""
+        """Test that external data files are filtered correctly using pointer files."""
         # Create source tree with external data
         src = tmp_path / "src"
         src.mkdir()
         (src / "regular.txt").write_text("regular file")
         
-        # Create external data directory
-        external_dir = src / "dataset.data"
-        external_dir.mkdir()
-        (external_dir / "data.bin").write_bytes(b"binary data")
+        # Create external data file
+        (src / "data.bin").write_bytes(b"binary data")
+        
+        # Create pointer file for external data
+        ptr_dir = src / ".mops" / "ptr"
+        ptr_dir.mkdir(parents=True)
+        
+        # Create pointer file that marks data.bin as external
+        ptr_file = ptr_dir / "data.bin.json"
+        ptr_file.write_text('{"original_path": "data.bin", "uri": "az://container/data.bin"}')
         
         # Export without external data
         archive = tmp_path / "archive.tar"
         write_deterministic_archive(str(src), str(archive), include_external=False)
         
-        # Verify external data is excluded
+        # Verify external data is excluded but pointer file is included
         with tarfile.open(archive, 'r') as tar:
             names = tar.getnames()
             assert "regular.txt" in names
-            assert "dataset.data" in names  # Directory included
-            assert "dataset.data/data.bin" not in names  # File excluded
+            assert ".mops/ptr/data.bin.json" in names  # Pointer file included
+            assert "data.bin" not in names  # External file excluded
 
     def test_path_normalization_windows_compatibility(self, tmp_path):
         """Test that paths are normalized for Windows compatibility."""
@@ -130,10 +135,14 @@ class TestDeterministicExport:
         archive = tmp_path / "archive.tar"
         write_deterministic_archive(str(src), str(archive))
         
-        # Verify USTAR format by checking tar file directly
-        with tarfile.open(archive, 'r') as tar:
-            # USTAR format uses specific header structure
-            assert tar.format == tarfile.USTAR_FORMAT
+        # Verify USTAR format by checking tar file header bytes directly
+        # USTAR archives have "ustar\0" magic at offset 257-262 in each header block
+        with open(archive, 'rb') as f:
+            # Read first 512-byte header block
+            header = f.read(512)
+            # Check for USTAR magic at offset 257
+            magic = header[257:263]
+            assert magic == b"ustar\x00", f"Expected USTAR magic, got {magic!r}"
 
     def test_atomic_write_on_failure(self, tmp_path):
         """Test that failed writes don't leave partial files."""
@@ -185,15 +194,15 @@ class TestHelperFunctions:
         assert normalize_relpath("path/to/file") == "path/to/file"
         assert normalize_relpath("path\\to\\file") == "path/to/file"
         
+        # Test that .mops paths are allowed in archives
+        assert normalize_relpath(".mops") == ".mops"
+        assert normalize_relpath(".mops/config") == ".mops/config"
+        
         # Test unsafe path rejection
         with pytest.raises(ValueError):
             normalize_relpath("../escape")
         with pytest.raises(ValueError):
             normalize_relpath("/absolute")
-        with pytest.raises(ValueError):
-            normalize_relpath(".mops")
-        with pytest.raises(ValueError):
-            normalize_relpath(".mops/config")
 
     def test_apply_canonical_headers(self):
         """Test tar header canonicalization."""
@@ -215,10 +224,3 @@ class TestHelperFunctions:
         assert info.mtime == 0
         assert info.mode == 0o644  # Normalized for regular file
 
-    def test_is_external_data_file(self):
-        """Test external data file detection."""
-        assert not _is_external_data_file(Path("regular.txt"))
-        assert not _is_external_data_file(Path("subdir/file.txt"))
-        assert _is_external_data_file(Path("dataset.data/file.bin"))
-        assert _is_external_data_file(Path("nested/dataset.data/sub/file.bin"))
-        assert not _is_external_data_file(Path("dataset/file.data"))  # .data suffix on file, not dir

@@ -42,7 +42,194 @@ Importantly, bundle identity is **content-addressable** — it's determined pure
 
 ---
 
-## 1) Media Types: Why They Matter and What We Use
+## 1) Architecture Overview
+
+### 1.1 OCI Registry Architecture
+
+The OCI Distribution Specification defines two main types of content that can be stored in any compliant registry:
+
+1. **Manifests** - JSON documents describing artifacts (metadata, references, configurations)
+2. **Blobs** - Binary content (layers, configs, actual file data)
+
+Both types are stored using content-addressable storage with SHA256 digests. This means identical content gets the same digest regardless of when or where it's stored, enabling powerful deduplication and verification capabilities.
+
+### 1.2 Why OCI/ORAS: What We Get "For Free"
+
+By building ModelOps Bundles on OCI registries via ORAS (OCI Registry As Storage), we inherit a massive ecosystem of battle-tested infrastructure rather than building storage systems from scratch.
+
+**Infrastructure Benefits:**
+- ✅ **Universal Registry Support**: Works with ANY OCI-compliant registry (ACR, ECR, GCR, Harbor, Artifactory, Quay, DockerHub)
+- ✅ **Content Deduplication**: Automatic dedup via content-addressing saves storage costs
+- ✅ **Atomic Operations**: Transactional pushes prevent corrupted or partial artifacts
+- ✅ **Resumable Uploads**: Built-in chunking and retry logic for large blobs
+- ✅ **Global CDN**: Many registries offer geo-replication and edge caching (e.g., ACR Premium)
+- ✅ **High Availability**: Enterprise registries provide 99.9%+ SLA with multi-region failover
+
+**Security & Compliance:**
+- ✅ **Signing & Verification**: Cosign/Notary v2 for supply chain security
+- ✅ **Vulnerability Scanning**: Existing security scanners (Trivy, Snyk, Aqua) work on our artifacts
+- ✅ **Audit Logging**: Registry access logs for SOC2/FedRAMP compliance
+- ✅ **Access Control**: Enterprise auth/authz (Azure AD, AWS IAM, RBAC) already integrated
+- ✅ **Immutable Tags**: Prevent tag mutation for reproducible science
+- ✅ **Network Policies**: Kubernetes NetworkPolicy/Calico rules already configured
+
+**Developer Experience:**
+- ✅ **Standard Tooling**: `docker`, `oras`, `crane`, `skopeo`, `regctl` all work out-of-the-box
+- ✅ **IDE Integration**: VS Code, IntelliJ registry browsers and extensions
+- ✅ **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins plugins, Azure DevOps tasks
+- ✅ **Local Development**: `docker run -d -p 5000:5000 registry:2` for instant local registry
+- ✅ **Air-Gapped Deployments**: Harbor, Artifactory support disconnected environments
+
+**Operations & Monitoring:**
+- ✅ **Observability**: Prometheus metrics, Grafana dashboards, DataDog integrations built-in
+- ✅ **Garbage Collection**: Registry GC handles blob cleanup and retention policies
+- ✅ **Backup/Disaster Recovery**: Enterprise backup solutions (Velero, registry replication)
+- ✅ **Rate Limiting**: Built-in throttling, quota management, and fair-use policies
+- ✅ **Multi-Tenancy**: Namespace isolation, project-based access controls
+
+**What We'd Have to Build Otherwise:**
+
+| Feature | OCI Provides | DIY Alternative |
+|---------|-------------|----------------|
+| Content Deduplication | ✅ Built-in SHA256 addressing | Custom hash storage with conflict resolution |
+| Resumable Uploads | ✅ Chunked upload API | Custom multipart upload with state management |
+| Access Control | ✅ Registry RBAC + enterprise SSO | Custom auth service + token management |
+| High Availability | ✅ Registry clustering + geo-replication | Multi-region storage + load balancing + failover |
+| Vulnerability Scanning | ✅ Existing scanner ecosystem | Custom security analysis pipeline |
+| Audit Logging | ✅ Registry access logs | Custom audit service + log aggregation |
+| **Total Engineering Effort** | **~0 months** | **~24-36 months** |
+
+### 1.3 Bundle Storage Architecture
+
+Our architecture uses a **hybrid storage strategy** that optimizes for both cost and performance:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    OCI Registry                              │
+│  ┌─────────────────────┐  ┌──────────────────────────────┐   │
+│  │ Bundle Manifest     │  │ Layer Indexes                │   │
+│  │ • Roles & layers    │  │ • File listings              │   │
+│  │ • Content addresses │  │ • ORAS vs external decisions │   │
+│  │ • Metadata          │  │ • Checksums & sizes          │   │
+│  └─────────────────────┘  └──────────────────────────────┘   │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ Small Files as Native Blobs                            │ │
+│  │ • Code (.py, .R, .yaml)                                │ │
+│  │ • Configs (.json, .toml)                               │ │  
+│  │ • Small models (<100MB)                                │ │
+│  │ • Documentation                                        │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                               │
+                               │ pointer files
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                External Blob Storage                        │
+│             (Azure Blob / S3 / GCS)                       │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ Large Files                                            │ │
+│  │ • Datasets (GB-TB .parquet, .csv)                     │ │
+│  │ • Large models (>100MB .pkl, .h5)                     │ │
+│  │ • Training artifacts                                   │ │
+│  │ • Media files                                          │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why This Hybrid Approach?**
+- **Registry**: Perfect for versioned, signed metadata and small frequently-accessed files
+- **External Storage**: Cost-effective for large data with lifecycle management (hot/cool/archive tiers)
+- **Integrity**: All files tracked with SHA256 checksums regardless of storage location
+- **Discovery**: Registry manifest provides single source of truth for all bundle contents
+
+### 1.4 Component Architecture
+
+Here's how the components relate in our layered, protocol-based design:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Runtime Layer                          │
+│                                                             │
+│  resolve(ref) → ResolvedBundle                             │
+│  materialize(ref, dest, role, provider) → ResolvedBundle   │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ uses
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                ContentProvider Protocol                     │
+│                                                             │
+│  • iter_entries(resolved, layers) → Iterator[MatEntry]     │
+│  • fetch_external(entry) → bytes                           │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ implements
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│              BundleContentProvider                          │
+│                 (Hybrid Implementation)                     │
+│                                                             │
+│  Orchestrates both registry and external storage           │
+└───────┬─────────────────────────────────────────┬───────────┘
+        │ uses                                    │ uses
+        ▼                                         ▼
+┌────────────────┐                    ┌─────────────────────┐
+│ RegistryStore  │                    │ ExternalStore       │
+│ Protocol       │                    │ Protocol            │
+│                │                    │                     │
+│ • get_manifest │                    │ • get_object        │
+│ • put_manifest │                    │ • put_object        │
+│ • get_blob     │                    │ • object_exists     │
+│ • put_blob     │                    │ • list_objects      │
+│ • blob_exists  │                    │                     │
+└────────┬───────┘                    └─────────┬───────────┘
+         │ implements                           │ implements
+         ▼                                      ▼
+┌────────────────┐                    ┌─────────────────────┐
+│ OrasAdapter    │                    │ AzureExternalStore  │
+│ (Production)   │                    │ S3ExternalStore     │
+│                │                    │ GcsExternalStore    │
+└────────────────┘                    └─────────────────────┘
+         │                                      │
+         │ test doubles                         │ test doubles
+         ▼                                      ▼
+┌────────────────┐                    ┌─────────────────────┐
+│FakeRegistry    │                    │ FakeExternalStore   │
+│Store           │                    │                     │
+└────────────────┘                    └─────────────────────┘
+```
+
+### 1.5 Key Design Decisions
+
+**Content-Addressable Identity:**
+- Every bundle has a deterministic digest based on its complete contents
+- Enables safe caching, deduplication, and verification
+- Immutable - same content always produces same bundle identity
+
+**Registry-Native Approach:**
+- Not fighting the OCI spec - we embrace and extend it
+- Bundle manifests are standard OCI manifests with our media types
+- Allows existing OCI tooling to work seamlessly with our artifacts
+
+**Protocol-First Design:**
+- Clean abstractions between layers (RegistryStore, ExternalStore, ContentProvider)
+- Enables testing with fakes and different storage backends
+- Runtime layer stays pure and storage-agnostic
+
+**Separation of Identity and Realization:**
+- `resolve()` determines WHAT (identity, roles, layers) without side effects
+- `materialize()` determines WHERE (filesystem layout) with precise control
+- Enables planning, auditing, and policy decisions before any downloads
+
+**Cost-Optimized Storage:**
+- Small, frequently accessed files in registry (fast, versioned, signed)
+- Large, infrequently accessed data in blob storage (cheap, with lifecycle policies)
+- Pointer files bridge the gap with full integrity guarantees
+
+This architecture gives us enterprise-grade bundle management built on proven infrastructure, letting us focus on ModelOps-specific features rather than reinventing storage systems.
+
+---
+
+## 2) Media Types: Why They Matter and What We Use
 
 Media types (MIME) in OCI/ORAS tell registries, scanners, admissions, and tooling **what** a blob or JSON is. We make them explicit and versionable.
 
@@ -75,7 +262,7 @@ MediaType = Literal[
 
 ---
 
-## 2) Contracts (in `modelops-contracts`)
+## 3) Contracts (in `modelops-contracts`)
 
 Everything starts in **contracts** to keep clients and servers decoupled.
 
@@ -106,7 +293,7 @@ This sits next to other artifact contracts (e.g., logs, model checkpoints). It c
 
 ---
 
-## 3) Planner Phases and Responsibilities
+## 4) Planner Phases and Responsibilities
 
 We retain a simple **scan → plan → publish** pipeline to keep the push path deterministic and auditable.
 
@@ -140,7 +327,7 @@ We retain a simple **scan → plan → publish** pipeline to keep the push path 
 
 ---
 
-## 4) Runtime: `resolve()` and `materialize()`
+## 5) Runtime: `resolve()` and `materialize()`
 
 ### 4.1 `resolve(ref, cache=True) -> ResolvedBundle`
 
@@ -471,59 +658,12 @@ ContentProvider owns content enumeration and retrieval for a set of layers:
 
 This keeps runtime pure and deterministic while letting storage strategies evolve.
 
-### Architecture Overview
-
-Here's how the components relate in our layered, protocol-based design:
-
-```
-┌─────────────┐
-│  Runtime    │ (materialize function)
-└─────┬───────┘
-      │ uses
-      ▼
-┌─────────────────────┐
-│ ContentProvider     │ (Protocol/Interface)
-│ - iter_entries()    │
-│ - fetch_external()  │
-└─────────────────────┘
-      ▲
-      │ implements
-      │
-┌─────────────────────────┐
-│ OrasExternalProvider    │ (Hybrid ORAS + External)
-│ - Uses storage backends │
-└───────┬─────────┬───────┘
-        │         │
-     uses      uses
-        │         │
-        ▼         ▼
-┌──────────┐  ┌──────────────┐
-│OrasStore │  │ExternalStore │ (Storage Protocols)
-└──────────┘  └──────────────┘
-     ▲              ▲
-     │              │
-implements     implements
-     │              │
-┌──────────┐  ┌──────────────┐
-│FakeOras  │  │FakeExternal  │ (Test Implementations)
-│Store     │  │Store         │
-└──────────┘  └──────────────┘
-```
-
-### Why "OrasExternalProvider"?
-
-The name reflects its hybrid storage strategy:
-- **Oras** - Handles ORAS registry content (small files: code, configs, manifests)
-- **External** - Handles external blob storage (large files: data, models, artifacts)
-
-This hybrid approach keeps registries lean while maintaining content integrity. Small files go through the registry for versioning and signing, while large files use cost-effective blob storage with pointer files for discovery.
-
 ### Component Roles
 
 - **Runtime**: Pure business logic, only knows ContentProvider protocol
 - **ContentProvider**: Protocol defining the runtime's needs (iter_entries, fetch_external)
-- **OrasExternalProvider**: Production implementation orchestrating both storage types
-- **OrasStore/ExternalStore**: Storage protocols abstracting registry/blob operations
+- **BundleContentProvider**: Production implementation orchestrating both storage types
+- **BundleRegistryStore/ExternalStore**: Storage protocols abstracting registry/blob operations
 - **Fakes**: In-memory test implementations for deterministic testing without network calls
 
 ### Responsibility Split
@@ -579,7 +719,7 @@ class ContentProvider(Protocol):
 
 ### Layer Index Format
 
-Each layer has an associated index manifest stored in ORAS with mediaType `LAYER_INDEX`. The OrasExternalProvider reads these indexes to enumerate files for materialization.
+Each layer has an associated index manifest stored in ORAS with mediaType `LAYER_INDEX`. The BundleContentProvider reads these indexes to enumerate files for materialization.
 
 **Example layer index for mixed ORAS + external content:**
 
@@ -641,7 +781,7 @@ As shown in the architecture diagram above, this layered design provides:
 
 ### Implementation Notes
 
-- **ContentProvider is a runtime extension point, not a contract type**. Tests must inject a fake provider; production uses an ORAS+External provider.
+- **ContentProvider is a runtime extension point, not a contract type**. Tests must inject a fake provider; production uses a BundleContentProvider.
 - **Storage layer**: ContentProviders use the Storage Abstractions (Section 4.10) to interact with ORAS registries and external storage systems.
 - **Deterministic behavior**: Runtime sorts entries by path and detects duplicates
 - **Atomic operations**: All file writes use temp file + `os.replace()` pattern
@@ -679,7 +819,7 @@ class ExternalStat:
     sha256: str        # 64 hex (no 'sha256:' prefix)
     tier: Optional[str] = None  # "hot" | "cool" | "archive" (hint only)
 
-class OrasStore(Protocol):
+class BundleRegistryStore(Protocol):
     def blob_exists(self, digest: str) -> bool: ...
     def get_blob(self, digest: str) -> bytes: ...
     def put_blob(self, digest: str, data: bytes) -> None: ...
@@ -711,7 +851,7 @@ class ExternalStore(Protocol):
 
 | Concern | Runtime | Provider |
 |---------|---------|----------|
-| Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via OrasStore/ExternalStore |
+| Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via BundleRegistryStore/ExternalStore |
 | Authentication/credentials | ❌ Never | ✅ Implementation detail |
 | Network retries/timeouts | ❌ Never | ✅ Implementation detail |
 | Content enumeration | ❌ Never | ✅ Via ContentProvider.iter_entries() |
@@ -725,13 +865,13 @@ To enable fast, deterministic tests and examples, we provide in-memory fakes nex
 modelops_bundles/storage/
   base.py          # protocols & ExternalStat
   fakes/
-    fake_oras.py
+    fake_oras.py  # FakeBundleRegistryStore
     fake_external.py
 ```
 
 **Why co-locate fakes with protocols?**
 
-- **Drift control**: When someone edits the protocols ExternalStore/OrasStore, the fake breaks in the same module tree—forcing updates and keeping the seam honest.
+- **Drift control**: When someone edits the protocols ExternalStore/BundleRegistryStore, the fake breaks in the same module tree—forcing updates and keeping the seam honest.
 - **Reusability**: Other packages (CLI, runners) can import the fakes for their unit tests without re-inventing fixtures.
 - **Type-safety**: The fake imports the exact protocol types (no circular test-import hacks).
 - **Deterministic tests**: In-memory storage lets us test runtime/provider logic with zero external deps.
@@ -847,7 +987,7 @@ This facade provides the right amount of structure for Stage 5: keeps CLI mainta
 
 ---
 
-## 5) Minimal Cache 
+## 6) Minimal Cache 
 
 **Cache Structure:**
 - **Where**: `~/.modelops/bundles/<manifest-digest>/layers/<layer-id>/…`
@@ -884,7 +1024,7 @@ This facade provides the right amount of structure for Stage 5: keeps CLI mainta
 
 ---
 
-## 6) Integration With the Cloud Execution Stack
+## 7) Integration With the Cloud Execution Stack
 
 ### 6.1 In Pods (Drones/Head)
 
@@ -904,7 +1044,7 @@ This satisfies the core requirement: **workspaces are mirrored from the user’s
 
 ---
 
-## 7) CLI Layout and Wiring
+## 8) CLI Layout and Wiring
 
 - `modelops-bundles` provides a **standalone Typer** CLI: `mops-bundles ...`.
 - `modelops` exposes it under the umbrella CLI as a **plugin**: `modelops bundles ...` via entry points:
@@ -1019,7 +1159,7 @@ Archives use tar with zstd compression for good balance of speed/compression. Us
 
 ---
 
-## 8) Security, Provenance, and Policy
+## 9) Security, Provenance, and Policy
 
 - **Content addressing**: all ORAS content verified by SHA‑256.
 - **External refs**: carry checksums and sizes; runtime can verify after download.
@@ -1029,7 +1169,7 @@ Archives use tar with zstd compression for good balance of speed/compression. Us
 
 ---
 
-## 9) Observability & Errors
+## 10) Observability & Errors
 
 - Every `resolve` and `materialize` emits: bundle name/version, **digest**, selected **role**, byte counts, timings.
 
@@ -1137,7 +1277,7 @@ Error messages MUST name at least the first 5 offending paths and the violated r
 
 ---
 
-## 10) Compatibility With Calabaria & Planner/Adapters
+## 11) Compatibility With Calabaria & Planner/Adapters
 
 - Calabaria defines **scientific tasks** and evaluation functions; it **does not** deal with registries.
 - ModelOps runners (Head/Drones) own **ask/tell** and call **`materialize`** to prepare the workdir before invoking Calabaria.
@@ -1145,7 +1285,7 @@ Error messages MUST name at least the first 5 offending paths and the violated r
 
 ---
 
-## 11) MVP vs. Later
+## 12) MVP vs. Later
 
 **MVP (ship now):**
 - Contracts (`BundleRef`, `ResolvedBundle`, `MediaType` constants).
@@ -1163,7 +1303,7 @@ Error messages MUST name at least the first 5 offending paths and the violated r
 
 ---
 
-## 12) Example Call Flows
+## 13) Example Call Flows
 
 ### 12.1 Enhanced Local Dev Workflow
 
@@ -1193,7 +1333,7 @@ modelops bundles pull epi-abm:latest --role sim --dest ./work --prefetch-externa
 ```python
 from modelops_contracts.artifacts import BundleRef
 from modelops_bundles.runtime import resolve, materialize
-from modelops_bundles.providers.oras_external import default_provider_from_env
+from modelops_bundles.providers.bundle_content import default_provider_from_env
 
 # Runtime API - same everywhere
 ref = BundleRef(name="epi-abm", version="2.2.1", role="sim")
@@ -1222,7 +1362,7 @@ echo "Using bundle digest: $BUNDLE_DIGEST"
 
 ---
 
-## 13) Rationale Recap (tying to your questions)
+## 14) Rationale Recap (tying to your questions)
 
 - **Why explicit MediaTypes?** To be policyable, interoperable, and evolvable with registries and scanners.
 - **Why `resolve` vs `materialize`?** Identity vs side effects. It simplifies orchestration and reproducibility.
@@ -1233,7 +1373,7 @@ echo "Using bundle digest: $BUNDLE_DIGEST"
 
 ---
 
-## 14) Appendix — Minimal Type Sketches
+## 15) Appendix — Minimal Type Sketches
 
 ```python
 # modelops_contracts/artifacts.py
@@ -1278,7 +1418,7 @@ external_storage:
 
 ---
 
-## 15) MVP Testing Strategy
+## 16) MVP Testing Strategy
 
 **Target coverage**: 85%+ lines, 90%+ of core modules (operations, storage, runtime, config_manager).
 
@@ -1338,7 +1478,7 @@ external_storage:
 
 ---
 
-## 16) JSON Schemas & Data Models
+## 17) JSON Schemas & Data Models
 
 ### 16.1 Pydantic Models
 
@@ -1436,7 +1576,7 @@ class DiffOutput(BaseModel):
 
 ---
 
-## 17) OCI Manifest Structure
+## 18) OCI Manifest Structure
 
 ### 17.1 Top-Level OCI Manifest
 
@@ -1513,7 +1653,7 @@ Example policy rule:
 
 ---
 
-## 18) Materialize Overwrite & Idempotency Semantics
+## 19) Materialize Overwrite & Idempotency Semantics
 
 **Goal**: Calling `materialize(ref, dest, …)` repeatedly is safe and deterministic. No silent drift. Conflicts are explicit.
 
@@ -1579,7 +1719,7 @@ def materialize_file(dest: str, relpath: str, expected_sha256: str, content: byt
 
 ---
 
-## 19) Role Validation Contract
+## 20) Role Validation Contract
 
 **Goal**: Roles are first-class and must be valid at authoring time and at runtime.
 
@@ -1610,7 +1750,7 @@ Exit code: 11
 
 ---
 
-## 20) Determinism Guarantees
+## 21) Determinism Guarantees
 
 **Goal**: Identical inputs produce identical `manifest_digest`. Any content change (or significant metadata change) moves the digest.
 
@@ -1684,7 +1824,7 @@ Deterministic export (§21) treats the materialized directory as the sole source
 
 ---
 
-## 21) Deterministic Export/Import
+## 22) Deterministic Export/Import
 
 **Goal**: The same bundle exports to a byte-identical archive every time on every machine.
 

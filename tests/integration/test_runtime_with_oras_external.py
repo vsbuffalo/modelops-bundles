@@ -1,5 +1,5 @@
 """
-Integration tests for runtime with OrasExternalProvider.
+Integration tests for runtime with BundleContentProvider.
 
 These tests verify the full end-to-end workflow from ResolvedBundle with
 layer_indexes through to materialized files and pointer files.
@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
-from modelops_bundles.providers.oras_external import OrasExternalProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeOrasStore
+from modelops_bundles.providers.bundle_content import BundleContentProvider
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
 from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime import materialize, WorkdirConflict
 
@@ -43,13 +43,13 @@ def _mk_resolved(ref_name="stage3", roles=None, layers=None, layer_indexes=None)
 
 
 class TestRuntimeWithOrasExternal:
-    """Test full integration of runtime with OrasExternalProvider."""
+    """Test full integration of runtime with BundleContentProvider."""
     
     def test_materialize_with_real_provider_oras_and_external(self, tmp_path):
         """Test full materialize workflow with ORAS files and external pointers."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Seed ORAS blobs + indexes
         code_py = b"# Python model code\nprint('hello world')\n"
@@ -101,7 +101,7 @@ class TestRuntimeWithOrasExternal:
         # Mock resolve to return our resolved bundle
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, cache=True: resolved
+        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
         
         try:
             # Materialize training role (includes data -> creates pointers)
@@ -111,7 +111,9 @@ class TestRuntimeWithOrasExternal:
                 dest, 
                 role="training", 
                 provider=provider, 
-                prefetch_external=False
+                prefetch_external=False,
+                registry=oras,
+                repository="test/repo"
             )
 
             # Check that resolve result is returned
@@ -148,9 +150,9 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_runtime_role_excludes_data(self, tmp_path):
         """Test that runtime role only gets code + config, no data pointers."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Simple setup with just code layer
         code_py = b"# runtime code only\n"
@@ -169,7 +171,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, cache=True: resolved
+        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
         
         try:
             dest = str(tmp_path / "runtime_workspace")
@@ -177,7 +179,9 @@ class TestRuntimeWithOrasExternal:
                 BundleRef(name="stage3", version="1.0.0"), 
                 dest, 
                 role="runtime", 
-                provider=provider
+                provider=provider,
+                registry=oras,
+                repository="test/repo"
             )
 
             # Should have code file
@@ -194,9 +198,9 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_prefetch_external_with_conflicts(self, tmp_path):
         """Test prefetch_external=True with conflict detection."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # External file that can be fetched
         external_content = b"actual-external-data"
@@ -231,7 +235,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, cache=True: resolved
+        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
         
         try:
             # Without overwrite -> should raise WorkdirConflict
@@ -242,7 +246,9 @@ class TestRuntimeWithOrasExternal:
                     role="runtime",
                     provider=provider, 
                     prefetch_external=True, 
-                    overwrite=False
+                    overwrite=False,
+                    registry=oras,
+                    repository="test/repo"
                 )
 
             # With overwrite -> should replace file and set pointer fulfilled
@@ -252,7 +258,9 @@ class TestRuntimeWithOrasExternal:
                 role="runtime",
                 provider=provider, 
                 prefetch_external=True, 
-                overwrite=True
+                overwrite=True,
+                registry=oras,
+                repository="test/repo"
             )
 
             # Check file was replaced
@@ -271,9 +279,9 @@ class TestRuntimeWithOrasExternal:
 
     def test_deterministic_materialization(self, tmp_path):
         """Test that repeated materialization is deterministic and idempotent."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore() 
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Simple mixed content
         code_content = b"# deterministic test\nprint('consistent')\n"
@@ -305,7 +313,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, cache=True: resolved
+        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
 
         try:
             dest = str(tmp_path / "deterministic_test")
@@ -315,7 +323,9 @@ class TestRuntimeWithOrasExternal:
                 BundleRef(name="stage3", version="1.0.0"),
                 dest,
                 role="test", 
-                provider=provider
+                provider=provider,
+                registry=oras,
+                repository="test/repo"
             )
             
             # Read results after first run
@@ -330,7 +340,9 @@ class TestRuntimeWithOrasExternal:
                 BundleRef(name="stage3", version="1.0.0"),
                 dest,
                 role="test",
-                provider=provider  
+                provider=provider,
+                registry=oras,
+                repository="test/repo"
             )
             
             # Results should be identical
@@ -355,9 +367,9 @@ class TestRuntimeWithOrasExternal:
 
     def test_reserved_prefix_via_provider_rejected(self, tmp_path):
         """Test that .mops/ path from provider gets rejected by runtime."""
-        oras = FakeOrasStore()
+        oras = FakeBundleRegistryStore()
         external = FakeExternalStore()
-        provider = OrasExternalProvider(oras=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external)
 
         # Create malicious index with .mops/ path
         evil_content = b"should not be written to reserved location"
@@ -376,7 +388,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, cache=True: resolved
+        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
         
         try:
             dest = str(tmp_path / "evil_workspace")
@@ -387,7 +399,9 @@ class TestRuntimeWithOrasExternal:
                     BundleRef(name="evil-bundle", version="1.0.0"), 
                     dest, 
                     role="runtime", 
-                    provider=provider
+                    provider=provider,
+                    registry=oras,
+                    repository="test/repo"
                 )
 
             # Verify no files were created at all

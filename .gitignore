@@ -13,3 +13,7 @@ wheels/
 # Note: .envrc is included in git for shared project config
 # but you can override locally with .envrc.local (which is ignored)
 .envrc.local
+
+# Temporary export archives
+*.tar
+*.tar.zst

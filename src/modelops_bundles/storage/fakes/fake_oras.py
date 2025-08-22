@@ -1,7 +1,7 @@
 """
 Fake ORAS store implementation for testing.
 
-This implementation explicitly subclasses OrasStore to ensure interface changes
+This implementation explicitly subclasses BundleRegistryStore to ensure interface changes
 break CI immediately, preventing silent drift.
 """
 from __future__ import annotations
@@ -10,17 +10,17 @@ import hashlib
 import re
 from typing import Dict
 
-from ..base import OrasStore
+from ..base import BundleRegistryStore
 
 # Regex for validating SHA256 digests
 _DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 
-__all__ = ["FakeOrasStore"]
+__all__ = ["FakeBundleRegistryStore"]
 
 
-class FakeOrasStore(OrasStore):
+class FakeBundleRegistryStore(BundleRegistryStore):
     """
-    In-memory ORAS store implementation for testing.
+    In-memory bundle registry store implementation for testing.
     
     This is a test double; not for production use.
     Keys are digests; values are bytes.
@@ -29,6 +29,7 @@ class FakeOrasStore(OrasStore):
     def __init__(self) -> None:
         self._blobs: Dict[str, bytes] = {}
         self._manifests: Dict[str, bytes] = {}
+        self._tags: Dict[str, str] = {}  # "repo/name:tag" -> "sha256:..."
 
     def blob_exists(self, digest: str) -> bool:
         """Check if blob exists. Always returns boolean, never raises."""
@@ -47,10 +48,14 @@ class FakeOrasStore(OrasStore):
         self._blobs[digest] = data
 
     def get_manifest(self, digest_or_ref: str) -> bytes:
-        """Retrieve manifest by digest or reference. Fake supports only digests."""
-        if digest_or_ref not in self._manifests:
+        """Retrieve manifest by digest or reference."""
+        key = digest_or_ref
+        if not key.startswith("sha256:"):
+            # Resolve tag -> digest if present
+            key = self._tags.get(key, key)
+        if key not in self._manifests:
             raise KeyError(digest_or_ref)
-        return self._manifests[digest_or_ref]
+        return self._manifests[key]
 
     def put_manifest(self, media_type: str, payload: bytes) -> str:
         """Store manifest and return computed digest."""
@@ -60,7 +65,22 @@ class FakeOrasStore(OrasStore):
         self._manifests[digest] = payload
         return digest
 
+    def tag_manifest(self, ref: str, digest: str) -> None:
+        """Tag a manifest with a reference (test utility).
+        
+        Args:
+            ref: Reference string like "repo/name:tag"
+            digest: Digest to associate with the reference
+            
+        Raises:
+            KeyError: If digest doesn't exist in manifests
+        """
+        if digest not in self._manifests:
+            raise KeyError(digest)
+        self._tags[ref] = digest
+
     def clear(self) -> None:
         """Clear all stored data (test utility)."""
         self._blobs.clear()
         self._manifests.clear()
+        self._tags.clear()

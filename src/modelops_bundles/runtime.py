@@ -18,6 +18,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from .path_safety import safe_relpath
 from .pointer_writer import write_pointer_file
 from .runtime_types import ContentProvider, MatEntry
+from .storage.base import BundleRegistryStore
 
 __all__ = ["resolve", "materialize", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
 
@@ -54,73 +55,121 @@ class BundleNotFoundError(Exception):
     pass
 
 
-def resolve(ref: BundleRef, *, cache: bool = True) -> ResolvedBundle:
+def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | None = None, cache: bool = True) -> ResolvedBundle:
     """
     Resolve bundle identity without side-effects (no FS writes).
     
-    Stage-1 stub: returns deterministic placeholder roles/layers and a fake digest
-    computed from the ref. Stage-2 will load real manifests from the registry/local
-    path and compute actual totals.
+    Makes network calls to registry to resolve real bundle manifests and
+    compute total sizes from layer indexes.
+    
+    Note: The total_size field reflects only external file sizes from
+    layer indexes as a best-effort calculation. ORAS blob sizes are not
+    included since they would require additional registry round-trips.
     
     This function:
     - Accepts BundleRef with one of: (name, version), digest, or local_path
-    - Makes network calls to registry to resolve manifests/indices (Stage-2)
-    - Returns ResolvedBundle with content addresses, roles, layer list, sizes
+    - Fetches bundle manifest from OCI registry via BundleRegistryStore
+    - Parses roles, layers, and layer_indexes from manifest
+    - Computes total_size by peeking at layer indexes (best-effort)
+    - Returns ResolvedBundle with real content addresses and metadata
     - Does NOT download blobs, create files, or write to workdir
-    - May create cache directory structure (mkdir only) if cache=True (Stage-2)
     
     Args:
         ref: Bundle reference to resolve
-        cache: Whether to prepare cache directory structure
+        cache: Whether to prepare cache directory structure (not implemented yet)
+        registry: BundleRegistryStore for registry access
+        repository: Repository namespace (e.g., "myorg/bundles") - required for name+version refs
         
     Returns:
         ResolvedBundle with manifest digest, roles, and metadata
         
     Raises:
-        BundleNotFoundError: If bundle cannot be found
-        ValueError: If ref is malformed
+        BundleNotFoundError: If bundle cannot be found in registry
+        ValueError: If ref is malformed or manifest has invalid format
     """
-    # TODO: Implement registry/local resolution logic
-    # For Stage 1 MVP, return a stub ResolvedBundle
-    
-    # Validate BundleRef constraints are met (contracts should handle this)
+    # Validate BundleRef constraints are met
     if not any([ref.local_path, ref.digest, (ref.name and ref.version)]):
         raise ValueError("BundleRef must specify exactly one of: local_path, digest, or name+version")
     
-    # For MVP, create a fake resolved bundle with deterministic content
-    # In real implementation, this would:
-    # 1. Resolve manifest from registry/local path
-    # 2. Parse roles and layers
-    # 3. Compute total sizes
-    # 4. Optionally create cache directory structure
+    # Determine manifest reference from BundleRef
+    if ref.digest:
+        manifest_ref = ref.digest
+    elif ref.name and ref.version:
+        if "/" in ref.name:
+            raise ValueError("Bundle names cannot contain '/'. Use digest or full registry path")
+        if not repository:
+            raise ValueError("repository required for name+version refs")
+        # Compose OCI reference from registry repo + name:version
+        manifest_ref = f"{repository}/{ref.name}:{ref.version}"
+    elif ref.local_path:
+        # Local path support (future feature)
+        raise ValueError("Local path support not implemented in Stage 6")
+    else:
+        raise ValueError("Invalid BundleRef: no resolvable reference found")
     
-    fake_digest = _compute_fake_digest(ref)
+    # Fetch bundle manifest from registry
+    try:
+        payload = registry.get_manifest(manifest_ref)
+    except KeyError as e:
+        raise BundleNotFoundError(f"Bundle manifest not found: {manifest_ref}") from e
     
-    # Simulate some realistic roles and layers for testing
-    fake_roles = {
-        "default": ["code", "config"],
-        "runtime": ["code", "config"], 
-        "training": ["code", "config", "data"]
-    }
-    fake_layers = ["code", "config", "data"]
+    # Parse manifest JSON
+    try:
+        doc = json.loads(payload.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"Invalid manifest JSON: {e}") from e
     
-    # Generate fake layer index digests for testing
-    # In real implementation, these would be actual layer index manifest digests
-    fake_layer_indexes = {}
-    for layer in fake_layers:
-        content = f"fake-layer-index:{fake_digest}:{layer}"
-        layer_digest = "sha256:" + hashlib.sha256(content.encode()).hexdigest()
-        fake_layer_indexes[layer] = layer_digest
+    # Validate media type
+    from modelops_contracts.artifacts import BUNDLE_MANIFEST, LAYER_INDEX
+    media_type = doc.get("mediaType")
+    if media_type != BUNDLE_MANIFEST:
+        raise ValueError(f"Invalid manifest mediaType: expected {BUNDLE_MANIFEST}, got {media_type!r}")
+    
+    # Parse manifest fields
+    roles = doc.get("roles", {})
+    layers = doc.get("layers", [])
+    layer_indexes = doc.get("layer_indexes", {})
+    external_index_present = bool(doc.get("external_index_present", True))
+    
+    # Compute best-effort total_size by peeking at layer indexes
+    total_size = 0
+    for layer in layers:
+        layer_index_digest = layer_indexes.get(layer)
+        if not layer_index_digest:
+            continue
+        
+        try:
+            # Fetch layer index to sum external file sizes
+            index_payload = registry.get_manifest(layer_index_digest)
+            index_doc = json.loads(index_payload.decode("utf-8"))
+            
+            # Validate layer index media type
+            if index_doc.get("mediaType") != LAYER_INDEX:
+                raise ValueError(f"Invalid LAYER_INDEX mediaType for layer '{layer}'")
+            
+            # Sum external entry sizes
+            for entry in index_doc.get("entries", []):
+                external = entry.get("external")
+                if external and "size" in external:
+                    total_size += int(external["size"])
+                    
+        except (KeyError, json.JSONDecodeError, ValueError):
+            # Layer index not found or malformed - will surface during materialize
+            # Don't fail resolve, just continue with partial size
+            continue
+    
+    # Compute canonical manifest digest
+    manifest_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     
     return ResolvedBundle(
         ref=ref,
-        manifest_digest=fake_digest,
-        roles=fake_roles,
-        layers=fake_layers,
-        external_index_present=True,  # Assume external data exists for testing
-        total_size=1024 * 1024,  # 1MB fake size
-        cache_dir=None,  # No cache implementation in Stage 1
-        layer_indexes=fake_layer_indexes
+        manifest_digest=manifest_digest,
+        roles=roles,
+        layers=layers,
+        external_index_present=external_index_present,
+        total_size=total_size,
+        cache_dir=None,  # Cache not implemented yet
+        layer_indexes=layer_indexes
     )
 
 
@@ -132,6 +181,8 @@ def materialize(
     overwrite: bool = False,
     prefetch_external: bool = False,
     provider: ContentProvider,
+    registry: BundleRegistryStore,
+    repository: str | None = None,
 ) -> ResolvedBundle:
     """
     Mirror layers for the selected role into dest.
@@ -151,6 +202,8 @@ def materialize(
         overwrite: Whether to overwrite conflicting files
         prefetch_external: Whether to download external data immediately
         provider: ContentProvider to enumerate entries for materialization
+        registry: BundleRegistryStore for registry access
+        repository: Repository namespace - required for name+version refs
         
     Returns:
         ResolvedBundle (same as resolve() would return)
@@ -161,7 +214,7 @@ def materialize(
         BundleNotFoundError: If bundle cannot be found
     """
     # First resolve the bundle to get metadata
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Select role using precedence rules
     selected_role = _select_role(resolved, ref, role)
@@ -468,20 +521,3 @@ def _write_provenance(dest_path: Path, resolved: ResolvedBundle, role: str) -> N
         raise
 
 
-def _compute_fake_digest(ref: BundleRef) -> str:
-    """
-    Compute a fake but deterministic manifest digest for testing.
-    
-    In real implementation, this would be the actual SHA-256 of the
-    canonical manifest JSON.
-    """
-    # Create deterministic fake digest based on ref
-    if ref.digest:
-        return ref.digest
-    elif ref.local_path:
-        content = f"local:{ref.local_path}"
-    else:
-        content = f"{ref.name}:{ref.version}"
-    
-    hash_bytes = hashlib.sha256(content.encode()).digest()
-    return "sha256:" + hash_bytes.hex()

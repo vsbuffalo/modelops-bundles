@@ -23,7 +23,7 @@ from .operations.printers import (
     print_stub_message
 )
 from .runtime_types import ContentProvider
-from .providers.oras_external import default_provider_from_env
+from .providers.bundle_content import default_provider_from_env
 
 app = typer.Typer(name="modelops-bundles", help="ModelOps Bundles CLI")
 
@@ -34,6 +34,7 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
     Supports formats:
     - "name:version" -> BundleRef(name, version)  
     - "sha256:digest" -> BundleRef(digest)
+    - "@sha256:digest" -> BundleRef(digest) [OCI format]
     - "/local/path" -> BundleRef(local_path)
     
     Args:
@@ -47,11 +48,17 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
     """
     if ref_str.startswith("sha256:"):
         return BundleRef(digest=ref_str)
+    elif ref_str.startswith("@sha256:"):
+        # OCI digest format - strip the @ prefix
+        return BundleRef(digest=ref_str[1:])
     elif ref_str.startswith("/") or ref_str.startswith("./") or ref_str.startswith("../"):
         return BundleRef(local_path=ref_str)
     elif ":" in ref_str:
         parts = ref_str.split(":", 1)  # Split only on first ':'
         if len(parts) == 2:
+            # Reject names containing "/" to avoid namespace confusion
+            if "/" in parts[0]:
+                raise ValueError("Bundle names cannot contain '/'. Use digest format for full registry paths")
             return BundleRef(name=parts[0], version=parts[1])
     
     raise ValueError(f"Invalid bundle reference format: {ref_str}")
@@ -77,6 +84,104 @@ def _create_provider(provider_name: Optional[str] = None) -> Optional[ContentPro
     # Use real provider for production
     return default_provider_from_env()
 
+def _create_registry_store(provider_name: Optional[str] = None):
+    """
+    Create BundleRegistryStore for resolve operations.
+    
+    Args:
+        provider_name: Provider type override for testing
+        
+    Returns:
+        BundleRegistryStore instance for registry access
+    """
+    if provider_name == "fake":
+        # Import here to avoid dependency on test code
+        try:
+            from .storage.fakes.fake_oras import FakeBundleRegistryStore
+            fake_store = FakeBundleRegistryStore()
+            # Add some fake manifests for testing
+            _add_fake_manifests(fake_store)
+            return fake_store
+        except ImportError:
+            typer.echo("Warning: FakeBundleRegistryStore not available, using real store")
+    
+    # Use real ORAS adapter for production
+    from .settings import load_settings_from_env
+    from .storage.oras import OrasAdapter
+    settings = load_settings_from_env()
+    return OrasAdapter(settings=settings)
+
+def _add_fake_manifests(fake_store):
+    """Add fake manifests to FakeBundleRegistryStore for testing."""
+    import json
+    import hashlib
+    
+    # First, create fake layer indexes with known digests
+    layer_index_digests = {}
+    
+    for layer in ["code", "config", "data"]:
+        layer_index = {
+            "mediaType": "application/vnd.modelops.layer+json",
+            "entries": []
+        }
+        
+        if layer == "data":
+            # Data layer has external entries
+            layer_index["entries"] = [
+                {
+                    "path": "data/train.csv",
+                    "external": {
+                        "uri": "az://fake-container/train.csv",
+                        "sha256": "fake-train-sha256",
+                        "size": 1048576
+                    }
+                },
+                {
+                    "path": "data/test.csv", 
+                    "external": {
+                        "uri": "az://fake-container/test.csv",
+                        "sha256": "fake-test-sha256",
+                        "size": 512000
+                    }
+                }
+            ]
+        else:
+            # Code/config layers have ORAS entries
+            layer_index["entries"] = [
+                {
+                    "path": f"{layer}/example.txt",
+                    "oras": {
+                        "digest": f"sha256:fake-{layer}-blob-digest"
+                    }
+                }
+            ]
+        
+        # Store layer index and get its computed digest
+        layer_payload = json.dumps(layer_index).encode()
+        digest = fake_store.put_manifest("application/vnd.modelops.layer+json", layer_payload)
+        layer_index_digests[layer] = digest
+    
+    # Now create bundle manifest with actual layer index digests
+    bundle_manifest = {
+        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+        "roles": {
+            "default": ["code", "config"],
+            "runtime": ["code", "config"],
+            "training": ["code", "config", "data"]
+        },
+        "layers": ["code", "config", "data"],
+        "layer_indexes": layer_index_digests,
+        "external_index_present": True
+    }
+    
+    # Store bundle manifest
+    bundle_payload = json.dumps(bundle_manifest).encode()
+    bundle_digest = fake_store.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
+    
+    # Tag manifest with references for testing using public API
+    fake_store.tag_manifest("test/repo/my/repo:1.2.3", bundle_digest)
+    fake_store.tag_manifest("test/repo/bundle:v1.0.0", bundle_digest)  # For CLI smoke tests
+
 @app.command()
 def resolve(
     bundle_ref: str = typer.Argument(..., help="Bundle reference to resolve"),
@@ -88,7 +193,13 @@ def resolve(
     def _resolve() -> None:
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache)
-        ops = Operations(config=config)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config)
         
         resolved = ops.resolve(ref)
         print_resolved_bundle(resolved)
@@ -112,7 +223,13 @@ def materialize(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci)
         content_provider = _create_provider(provider)
-        ops = Operations(config=config, provider=content_provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         resolved = ops.materialize(
             ref=ref,
@@ -145,7 +262,13 @@ def pull(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci)
         content_provider = _create_provider(provider)
-        ops = Operations(config=config, provider=content_provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         resolved = ops.pull(
             ref=ref,
@@ -194,13 +317,14 @@ def export(
             elif not use_compression and not final_out_path.endswith('.tar'):
                 raise typer.BadParameter(f"With --compression none, output path must end with .tar")
         
-        config = OpsConfig(zstd_level=19)  # Fixed level for determinism
-        ops = Operations(config=config)
+        # Export doesn't need registry access, so call directly
+        from modelops_bundles.export import write_deterministic_archive
         
-        ops.export(
+        write_deterministic_archive(
             src_dir=src_dir,
             out_path=final_out_path,
-            include_external=include_external
+            include_external=include_external,
+            zstd_level=19  # Fixed level for determinism
         )
         
         print_export_summary(src_dir, final_out_path, include_external)
@@ -216,7 +340,14 @@ def scan(
     
     def _scan() -> None:
         config = OpsConfig()
-        ops = Operations(config=config, provider=_create_provider(provider))
+        content_provider = _create_provider(provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         result = ops.scan(working_dir)
         print_stub_message("scan")
@@ -234,7 +365,14 @@ def plan(
     
     def _plan() -> None:
         config = OpsConfig()
-        ops = Operations(config=config, provider=_create_provider(provider))
+        content_provider = _create_provider(provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         result = ops.plan(working_dir, external_preview=external_preview)
         print_stub_message("plan")
@@ -251,7 +389,14 @@ def diff(
     
     def _diff() -> None:
         config = OpsConfig()
-        ops = Operations(config=config, provider=_create_provider(provider))
+        content_provider = _create_provider(provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         result = ops.diff(ref_or_path)
         print_stub_message("diff")
@@ -270,7 +415,13 @@ def push(
     def _push() -> None:
         config = OpsConfig()
         content_provider = _create_provider(provider)
-        ops = Operations(config=config, provider=content_provider)
+        
+        # Create registry and repository based on provider type
+        if provider == "fake":
+            registry = _create_registry_store(provider)
+            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
+        else:
+            ops = Operations(config=config, provider=content_provider)
         
         result = ops.push(working_dir, bump=bump)
         print_stub_message("push")

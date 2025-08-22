@@ -9,15 +9,36 @@ from __future__ import annotations
 import json
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize
 from modelops_bundles.runtime_types import ContentProvider, MatEntry
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
 from collections.abc import Iterable
 
 
 class TestProvenanceFile:
     """Test provenance file creation and content."""
+    
+    def _create_test_setup(self):
+        """Create test registry and mock resolved bundle."""
+        registry = FakeBundleRegistryStore()
+        repository = "test/repo"
+        
+        # Create a mock resolved bundle
+        resolved = ResolvedBundle(
+            ref=BundleRef(digest="sha256:" + "a" * 64),
+            manifest_digest="sha256:" + "b" * 64,
+            roles={"default": ["code"], "runtime": ["code"], "training": ["code", "data"]},
+            layers=["code", "data"],
+            external_index_present=True,
+            total_size=100,
+            cache_dir=None,
+            layer_indexes={"code": "sha256:" + "c" * 64, "data": "sha256:" + "d" * 64}
+        )
+        
+        return registry, repository, resolved
     
     def test_provenance_file_exists_after_materialize(self, tmp_path):
         """Test that provenance file is created at expected location."""
@@ -30,17 +51,22 @@ class TestProvenanceFile:
                 return b"test"
         
         provider = EmptyProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         # Create a simple test bundle ref
         ref = BundleRef(digest="sha256:" + "a" * 64)
         
-        # Materialize bundle
-        result = materialize(
-            ref=ref,
-            dest=str(tmp_path),
-            role="default",
-            provider=provider
-        )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # Materialize bundle
+            result = materialize(
+                ref=ref,
+                dest=str(tmp_path),
+                role="default",
+                provider=provider,
+                registry=registry,
+                repository=repository
+            )
         
         # Check that provenance file exists
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -68,16 +94,33 @@ class TestProvenanceFile:
                 return b"test"
         
         provider = EmptyProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(name="test-bundle", version="v1.0.0")
         
-        # Materialize with specific role
-        result = materialize(
-            ref=ref,
-            dest=str(tmp_path),
-            role="training",
-            provider=provider
+        # Create resolved bundle with the original ref
+        resolved_with_orig_ref = ResolvedBundle(
+            ref=ref,  # Use original ref instead of digest-based one
+            manifest_digest="sha256:" + "b" * 64,
+            roles={"default": ["code"], "runtime": ["code"], "training": ["code", "data"]},
+            layers=["code", "data"],
+            external_index_present=True,
+            total_size=100,
+            cache_dir=None,
+            layer_indexes={"code": "sha256:" + "c" * 64, "data": "sha256:" + "d" * 64}
         )
+        
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved_with_orig_ref):
+            # Materialize with specific role
+            result = materialize(
+                ref=ref,
+                dest=str(tmp_path),
+                role="training",
+                provider=provider,
+                registry=registry,
+                repository=repository
+            )
         
         # Read provenance file
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -114,15 +157,20 @@ class TestProvenanceFile:
                 return b"test"
         
         provider = EmptyProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(local_path="/fake/path")
         
-        materialize(
-            ref=ref,
-            dest=str(tmp_path),
-            role="default",
-            provider=provider
-        )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            materialize(
+                ref=ref,
+                dest=str(tmp_path),
+                role="default",
+                provider=provider,
+                registry=registry,
+                repository=repository
+            )
         
         # Read provenance file content as text
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -149,17 +197,22 @@ class TestProvenanceFile:
                 return b"test"
         
         provider = EmptyProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref1 = BundleRef(digest="sha256:" + "a" * 64)
         ref2 = BundleRef(digest="sha256:" + "b" * 64)
         
-        # First materialization with default role
-        materialize(
-            ref=ref1,
-            dest=str(tmp_path),
-            role="default", 
-            provider=provider
-        )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # First materialization with default role
+            materialize(
+                ref=ref1,
+                dest=str(tmp_path),
+                role="default", 
+                provider=provider,
+                registry=registry,
+                repository=repository
+            )
         
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
         
@@ -167,14 +220,29 @@ class TestProvenanceFile:
         with open(provenance_path, 'r') as f:
             first_data = json.load(f)
         
-        # Second materialization with different role
-        materialize(
-            ref=ref2,
-            dest=str(tmp_path),
-            role="training",
-            provider=provider,
-            overwrite=True
+        # Create different resolved bundle for second materialization
+        resolved2 = ResolvedBundle(
+            ref=BundleRef(digest="sha256:" + "b" * 64),
+            manifest_digest="sha256:" + "e" * 64,  # Different digest
+            roles={"default": ["code"], "runtime": ["code"], "training": ["code", "data"]},
+            layers=["code", "data"],
+            external_index_present=True,
+            total_size=200,
+            cache_dir=None,
+            layer_indexes={"code": "sha256:" + "f" * 64, "data": "sha256:" + "g" * 64}
         )
+        
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved2):
+            # Second materialization with different role
+            materialize(
+                ref=ref2,
+                dest=str(tmp_path),
+                role="training",
+                provider=provider,
+                overwrite=True,
+                registry=registry,
+                repository=repository
+            )
         
         # Read updated provenance
         with open(provenance_path, 'r') as f:

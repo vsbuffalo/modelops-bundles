@@ -9,7 +9,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from modelops_bundles.providers.oras_external import default_provider_from_env, OrasExternalProvider
+from modelops_bundles.providers.bundle_content import default_provider_from_env, BundleContentProvider
 
 
 class TestDefaultProviderFromEnv:
@@ -34,8 +34,8 @@ class TestDefaultProviderFromEnv:
                     
                     provider = default_provider_from_env()
                     
-                    # Should return OrasExternalProvider
-                    assert isinstance(provider, OrasExternalProvider)
+                    # Should return BundleContentProvider
+                    assert isinstance(provider, BundleContentProvider)
                     
                     # Should have created both adapters
                     mock_oras.assert_called_once()

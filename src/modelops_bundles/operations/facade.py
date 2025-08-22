@@ -13,6 +13,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from ..runtime import resolve as _resolve, materialize as _materialize
 from ..runtime_types import ContentProvider
+from ..storage.base import BundleRegistryStore
 
 @dataclass(frozen=True)
 class OpsConfig:
@@ -47,16 +48,33 @@ class Operations:
     configuration policy consistently.
     """
     
-    def __init__(self, config: OpsConfig, provider: Optional[ContentProvider] = None):
+    def __init__(self, config: OpsConfig, provider: Optional[ContentProvider] = None, 
+                 registry: Optional[BundleRegistryStore] = None, repository: Optional[str] = None):
         """
         Initialize Operations facade.
         
         Args:
             config: Configuration settings
             provider: Content provider for materialize operations (None for resolve-only)
+            registry: Bundle registry store (if None, loaded from environment)
+            repository: Repository namespace (if None, loaded from environment)
         """
         self.cfg = config
         self.provider = provider
+        
+        if registry is not None:
+            # Use provided registry and repository (explicit injection)
+            if repository is None:
+                raise ValueError("repository must be provided when injecting registry")
+            self.registry = registry
+            self.repository = repository
+        else:
+            # Create registry and repository from environment settings
+            from ..settings import load_settings_from_env
+            from ..storage.oras import OrasAdapter
+            settings = load_settings_from_env()
+            self.registry = OrasAdapter(settings=settings)
+            self.repository = settings.registry_repo
 
     def resolve(self, ref: BundleRef) -> ResolvedBundle:
         """
@@ -68,7 +86,7 @@ class Operations:
         Returns:
             Resolved bundle with manifest digest and metadata
         """
-        return _resolve(ref, cache=self.cfg.cache)
+        return _resolve(ref, registry=self.registry, repository=self.repository, cache=self.cfg.cache)
 
     def materialize(self, ref: BundleRef, dest: str, *,
                     role: Optional[str] = None,
@@ -98,7 +116,9 @@ class Operations:
             role=role,
             overwrite=overwrite,
             prefetch_external=prefetch_external,
-            provider=self.provider
+            provider=self.provider,
+            registry=self.registry,
+            repository=self.repository
         )
 
     def pull(self, ref: BundleRef, dest: str, *,

@@ -28,36 +28,36 @@ class TestCLISmokeTests:
     def test_resolve_command_basic(self):
         """Test resolve command with fake provider."""
         result = self.runner.invoke(app, [
-            "resolve", "test/bundle:v1.0.0",
+            "resolve", "bundle:v1.0.0",
             "--provider", "fake"
         ])
         
         assert result.exit_code == 0
         assert "Manifest:" in result.stdout
-        assert "Bundle: test/bundle:v1.0.0" in result.stdout
+        assert "Bundle: bundle:v1.0.0" in result.stdout
         assert "Size:" in result.stdout
 
     def test_resolve_command_no_cache(self):
         """Test resolve command with caching disabled."""
         result = self.runner.invoke(app, [
-            "resolve", "test/bundle:v1.0.0",
+            "resolve", "bundle:v1.0.0",
             "--no-cache",
             "--provider", "fake"
         ])
         
         assert result.exit_code == 0
-        assert "Bundle: test/bundle:v1.0.0" in result.stdout
+        assert "Bundle: bundle:v1.0.0" in result.stdout
 
     def test_materialize_command_basic(self):
         """Test materialize command with fake provider."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
-                "materialize", "test/bundle:v1.0.0", temp_dir,
+                "materialize", "bundle:v1.0.0", temp_dir,
                 "--provider", "fake"
             ])
             
             assert result.exit_code == 0
-            assert f"Materialized test/bundle:v1.0.0 to {temp_dir}" in result.stdout
+            assert f"Materialized bundle:v1.0.0 to {temp_dir}" in result.stdout
             assert "Role:" in result.stdout
             assert "Layers:" in result.stdout
 
@@ -65,7 +65,7 @@ class TestCLISmokeTests:
         """Test materialize command with various options."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
-                "materialize", "test/bundle:v1.0.0", temp_dir,
+                "materialize", "bundle:v1.0.0", temp_dir,
                 "--role", "runtime",
                 "--overwrite",
                 "--prefetch-external",
@@ -75,18 +75,18 @@ class TestCLISmokeTests:
             ])
             
             assert result.exit_code == 0
-            assert "Materialized test/bundle:v1.0.0" in result.stdout
+            assert "Materialized bundle:v1.0.0" in result.stdout
 
     def test_pull_command_alias(self):
         """Test pull command as alias for materialize."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
-                "pull", "test/bundle:v1.0.0", temp_dir,
+                "pull", "bundle:v1.0.0", temp_dir,
                 "--provider", "fake"
             ])
             
             assert result.exit_code == 0
-            assert f"Materialized test/bundle:v1.0.0 to {temp_dir}" in result.stdout
+            assert f"Materialized bundle:v1.0.0 to {temp_dir}" in result.stdout
 
     def test_export_command_basic(self):
         """Test export command with temporary directory."""
@@ -98,7 +98,8 @@ class TestCLISmokeTests:
             archive_path = Path(temp_dir) / "output.tar"
             
             result = self.runner.invoke(app, [
-                "export", str(src_dir), str(archive_path)
+                "export", str(src_dir), str(archive_path),
+                "--compression", "none"
             ])
             
             assert result.exit_code == 0
@@ -117,8 +118,7 @@ class TestCLISmokeTests:
             
             result = self.runner.invoke(app, [
                 "export", str(src_dir), str(archive_path),
-                "--include-external",
-                "--zstd-level", "3"
+                "--include-external"
             ])
             
             assert result.exit_code == 0
@@ -152,13 +152,13 @@ class TestCLISmokeTests:
     def test_diff_command_stub(self):
         """Test diff command stub functionality."""
         result = self.runner.invoke(app, [
-            "diff", "test/bundle:v1.0.0",
+            "diff", "bundle:v1.0.0",
             "--provider", "fake"
         ])
         
         assert result.exit_code == 0
         assert "[diff] Command implemented as stub for Stage 5" in result.stdout
-        assert "Diff for test/bundle:v1.0.0 (stub)" in result.stdout
+        assert "Diff for bundle:v1.0.0 (stub)" in result.stdout
 
     def test_push_command_stub(self):
         """Test push command stub functionality."""
@@ -202,17 +202,21 @@ class TestCLISmokeTests:
         assert result.exit_code == 0
         assert "Resolve bundle identity" in result.stdout
 
-    @patch('modelops_bundles.cli._create_provider')
-    def test_provider_injection(self, mock_create_provider):
-        """Test that provider injection works correctly."""
-        mock_provider = FakeProvider()
-        mock_create_provider.return_value = mock_provider
+    @patch('modelops_bundles.cli._create_registry_store')
+    def test_provider_injection(self, mock_create_registry_store):
+        """Test that registry store injection works correctly."""
+        from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+        from modelops_bundles.cli import _add_fake_manifests
+        
+        mock_registry = FakeBundleRegistryStore()
+        _add_fake_manifests(mock_registry)  # Add the expected manifests
+        mock_create_registry_store.return_value = mock_registry
         
         result = self.runner.invoke(app, [
-            "resolve", "test/bundle:v1.0.0"
+            "resolve", "bundle:v1.0.0", "--provider", "fake"
         ])
         
-        mock_create_provider.assert_called_once_with(None)
+        mock_create_registry_store.assert_called_once_with("fake")
         assert result.exit_code == 0
 
     def test_default_arguments(self):

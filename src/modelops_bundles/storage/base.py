@@ -27,8 +27,8 @@ class ExternalStat:
 
 
 @runtime_checkable
-class OrasStore(Protocol):
-    """Protocol for ORAS registry operations."""
+class BundleRegistryStore(Protocol):
+    """Protocol for bundle registry (e.g. OCI Registry) operations."""
     
     def blob_exists(self, digest: str) -> bool:
         """
@@ -105,7 +105,7 @@ class OrasStore(Protocol):
         ...
 
 
-__all__ = ["ExternalStat", "OrasStore", "ExternalStore"]
+__all__ = ["ExternalStat", "BundleRegistryStore", "ExternalStore"]
 
 
 @runtime_checkable

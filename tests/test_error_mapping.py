@@ -97,9 +97,10 @@ class TestRunAndExit:
     def test_function_exception_raises_typer_exit(self):
         """Test that function exceptions are converted to typer.Exit."""
         def failing_func():
-            exc = Mock()
-            exc.__class__.__name__ = "BundleNotFoundError"
-            raise exc
+            # Create a proper exception that can be raised
+            class BundleNotFoundError(Exception):
+                pass
+            raise BundleNotFoundError("test error")
         
         with pytest.raises(typer.Exit) as exc_info:
             run_and_exit(failing_func)
@@ -121,14 +122,14 @@ class TestRunAndExit:
     def test_different_exceptions_map_to_different_codes(self):
         """Test that different exceptions produce different exit codes."""
         def bundle_not_found_func():
-            exc = Mock()
-            exc.__class__.__name__ = "BundleNotFoundError"
-            raise exc
+            class BundleNotFoundError(Exception):
+                pass
+            raise BundleNotFoundError("test error")
         
         def validation_error_func():
-            exc = Mock()
-            exc.__class__.__name__ = "ValidationError"
-            raise exc
+            class ValidationError(Exception):
+                pass
+            raise ValidationError("test error")
         
         # Test BundleNotFoundError -> exit code 1
         with pytest.raises(typer.Exit) as exc_info:
@@ -146,9 +147,9 @@ class TestRunAndExit:
             try:
                 raise ValueError("inner error")
             except ValueError as e:
-                wrapped_exc = Mock()
-                wrapped_exc.__class__.__name__ = "BundleDownloadError"
-                raise wrapped_exc from e
+                class BundleDownloadError(Exception):
+                    pass
+                raise BundleDownloadError("test error") from e
         
         with pytest.raises(typer.Exit) as exc_info:
             run_and_exit(nested_func)
@@ -175,9 +176,9 @@ class TestRunAndExit:
     def test_exit_code_consistency_across_calls(self):
         """Test that same exception type always produces same exit code."""
         def validation_error_func():
-            exc = Mock()
-            exc.__class__.__name__ = "ValidationError"
-            raise exc
+            class ValidationError(Exception):
+                pass
+            raise ValidationError("test error")
         
         # Call multiple times and verify consistent exit codes
         exit_codes = []
@@ -196,15 +197,15 @@ class TestErrorMappingIntegration:
         """Test simulation of CLI command error handling."""
         def simulate_cli_resolve():
             # Simulate bundle not found during resolve
-            exc = Mock()
-            exc.__class__.__name__ = "BundleNotFoundError"
-            raise exc
+            class BundleNotFoundError(Exception):
+                pass
+            raise BundleNotFoundError("test error")
         
         def simulate_cli_materialize():
             # Simulate validation error during materialize
-            exc = Mock()
-            exc.__class__.__name__ = "ValidationError" 
-            raise exc
+            class ValidationError(Exception):
+                pass
+            raise ValidationError("test error")
         
         # Test resolve command error
         with pytest.raises(typer.Exit) as exc_info:
@@ -219,9 +220,9 @@ class TestErrorMappingIntegration:
     def test_error_boundary_isolation(self):
         """Test that errors don't leak between command invocations."""
         def first_command():
-            exc = Mock()
-            exc.__class__.__name__ = "BundleNotFoundError"
-            raise exc
+            class BundleNotFoundError(Exception):
+                pass
+            raise BundleNotFoundError("test error")
         
         def second_command():
             return "success"

@@ -1,7 +1,7 @@
 """
 ORAS registry adapter for OCI distribution.
 
-Implements OrasStore protocol using oras-py.
+Implements BundleRegistryStore protocol using oras-py.
 Handles authentication, media type validation, and OCI spec compliance.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Optional
 import re
 
 from ..settings import Settings
-from ..storage.base import OrasStore
+from ..storage.base import BundleRegistryStore
 
 # Import media types from contracts (single source of truth)
 from modelops_contracts.artifacts import (
@@ -39,9 +39,9 @@ KNOWN_MEDIA_TYPES = {
 }
 
 
-class OrasAdapter(OrasStore):
+class OrasAdapter(BundleRegistryStore):
     """
-    OrasStore adapter for OCI registry operations.
+    BundleRegistryStore adapter for OCI registry operations.
     
     Requires oras-py for OCI spec compliance.
     Handles authentication via Docker config or environment variables.
@@ -238,7 +238,7 @@ class OrasAdapter(OrasStore):
         """
         def _get_manifest_impl():
             try:
-                return self._oras_client.pull_manifest(digest_or_ref)
+                return self._oras_client.get_manifest(digest_or_ref)
             except Exception as e:
                 if "404" in str(e) or "not found" in str(e).lower():
                     raise KeyError(digest_or_ref)

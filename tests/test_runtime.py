@@ -22,48 +22,122 @@ from modelops_bundles.runtime import (
     _validate_role
 )
 from .fake_provider import FakeProvider
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+
+
+@pytest.fixture
+def mock_registry_and_repo():
+    """Fixture that provides registry and repository for testing."""
+    # Create and seed FakeBundleRegistryStore
+    fake_registry = FakeBundleRegistryStore()
+    repository = "test/repo"
+    
+    # Create fake layer indexes
+    import json
+    layer_index_digests = {}
+    
+    for layer in ["code", "config", "data"]:
+        layer_index = {
+            "mediaType": "application/vnd.modelops.layer+json", 
+            "entries": []
+        }
+        
+        if layer == "data":
+            layer_index["entries"] = [
+                {
+                    "path": "data/train.csv",
+                    "external": {
+                        "uri": "az://fake-container/train.csv",
+                        "sha256": "fake-train-sha256",
+                        "size": 1048576
+                    }
+                }
+            ]
+        else:
+            layer_index["entries"] = [
+                {
+                    "path": f"{layer}/example.txt",
+                    "oras": {
+                        "digest": f"sha256:fake-{layer}-blob-digest"
+                    }
+                }
+            ]
+        
+        layer_payload = json.dumps(layer_index).encode()
+        digest = fake_registry.put_manifest("application/vnd.modelops.layer+json", layer_payload)
+        layer_index_digests[layer] = digest
+    
+    # Create bundle manifest
+    bundle_manifest = {
+        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+        "roles": {
+            "default": ["code", "config"],
+            "runtime": ["code", "config"], 
+            "training": ["code", "config", "data"]
+        },
+        "layers": ["code", "config", "data"],
+        "layer_indexes": layer_index_digests,
+        "external_index_present": True
+    }
+    
+    bundle_payload = json.dumps(bundle_manifest).encode()
+    bundle_digest = fake_registry.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
+    
+    # Tag the bundle manifest with the test reference
+    fake_registry.tag_manifest("test/repo/test:1.0", bundle_digest)
+    fake_registry.tag_manifest("test/repo/integration-test:2.0", bundle_digest)
+    
+    return fake_registry, repository
 
 
 # =============================================================================
 # Role Selection Precedence Tests
 # =============================================================================
 
-def test_role_selection_precedence_arg_wins():
+def test_role_selection_precedence_arg_wins(mock_registry_and_repo):
     """Test that function argument role overrides ref.role."""
+    registry, repository = mock_registry_and_repo
+    
     # Create a resolved bundle with roles
     ref = BundleRef(name="test", version="1.0", role="ref-role")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Function arg should win over ref.role
     selected = _select_role(resolved, ref, "runtime")
     assert selected == "runtime"
 
 
-def test_role_selection_precedence_ref_role():
-    """Test that ref.role is used when no function argument provided.""" 
+def test_role_selection_precedence_ref_role(mock_registry_and_repo):
+    """Test that ref.role is used when no function argument provided."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0", role="runtime")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Should use ref.role when no argument provided
     selected = _select_role(resolved, ref, None)
     assert selected == "runtime"
 
 
-def test_role_selection_precedence_default():
+def test_role_selection_precedence_default(mock_registry_and_repo):
     """Test that 'default' role is used when no arg or ref.role."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Should use "default" role when present and no other specification
     selected = _select_role(resolved, ref, None)
     assert selected == "default"
 
 
-def test_role_selection_precedence_error():
+def test_role_selection_precedence_error(mock_registry_and_repo):
     """Test error when no role can be determined."""
+    registry, repository = mock_registry_and_repo
+    
     # Create ref without role hint
     ref = BundleRef(name="test", version="1.0")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Create a copy without default role to force error
     no_default_roles = {k: v for k, v in resolved.roles.items() if k != "default"}
@@ -73,20 +147,24 @@ def test_role_selection_precedence_error():
         _select_role(no_default, ref, None)
 
 
-def test_validate_role_exists():
+def test_validate_role_exists(mock_registry_and_repo):
     """Test that _validate_role accepts valid roles."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Should accept existing role
     result = _validate_role(resolved, "runtime")
     assert result == "runtime"
 
 
-def test_validate_role_not_found():
+def test_validate_role_not_found(mock_registry_and_repo):
     """Test that _validate_role rejects non-existent roles."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     with pytest.raises(RoleLayerMismatch, match="Role 'nonexistent' not found"):
         _validate_role(resolved, "nonexistent")
@@ -96,10 +174,12 @@ def test_validate_role_not_found():
 # Resolve Function Tests  
 # =============================================================================
 
-def test_resolve_returns_resolved_bundle():
+def test_resolve_returns_resolved_bundle(mock_registry_and_repo):
     """Test that resolve() returns a ResolvedBundle."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
-    result = resolve(ref)
+    result = resolve(ref, registry=registry, repository=repository)
     
     assert result.ref == ref
     assert result.manifest_digest.startswith("sha256:")
@@ -109,19 +189,23 @@ def test_resolve_returns_resolved_bundle():
     assert result.total_size > 0
 
 
-def test_resolve_deterministic():
+def test_resolve_deterministic(mock_registry_and_repo):
     """Test that resolve() returns same digest for same input."""
+    registry, repository = mock_registry_and_repo
+    
     ref1 = BundleRef(name="test", version="1.0")
     ref2 = BundleRef(name="test", version="1.0")
     
-    result1 = resolve(ref1)
-    result2 = resolve(ref2)
+    result1 = resolve(ref1, registry=registry, repository=repository)
+    result2 = resolve(ref2, registry=registry, repository=repository)
     
     assert result1.manifest_digest == result2.manifest_digest
 
 
-def test_resolve_no_fs_side_effects(tmp_path):
+def test_resolve_no_fs_side_effects(tmp_path, mock_registry_and_repo):
     """Test that resolve() doesn't create any files."""
+    registry, repository = mock_registry_and_repo
+    
     # Record initial directory state
     initial_files = list(tmp_path.rglob("*"))
     
@@ -132,7 +216,7 @@ def test_resolve_no_fs_side_effects(tmp_path):
         os.chdir(tmp_path)
         
         ref = BundleRef(name="test", version="1.0")
-        resolve(ref)
+        resolve(ref, registry=registry, repository=repository)
         
         # Check no files were created
         final_files = list(tmp_path.rglob("*"))
@@ -142,22 +226,28 @@ def test_resolve_no_fs_side_effects(tmp_path):
         os.chdir(original_cwd)
 
 
-def test_resolve_different_ref_types():
+def test_resolve_different_ref_types(mock_registry_and_repo):
     """Test resolve with different BundleRef types."""
+    registry, repository = mock_registry_and_repo
+    
+    
     # Name + version
     ref1 = BundleRef(name="test", version="1.0")
-    result1 = resolve(ref1)
+    result1 = resolve(ref1, registry=registry, repository=repository)
     
-    # Digest
-    ref2 = BundleRef(digest="sha256:" + "a" * 64)
-    result2 = resolve(ref2)
+    # Digest - use the actual digest from our fake store
+    actual_digest = result1.manifest_digest
+    ref2 = BundleRef(digest=actual_digest)
+    result2 = resolve(ref2, registry=registry, repository=repository)
     
-    # Local path
+    # Local path - should raise error for unsupported feature
     ref3 = BundleRef(local_path="/tmp/test")
-    result3 = resolve(ref3)
+    with pytest.raises(ValueError, match="Local path support not implemented"):
+        resolve(ref3, registry=registry, repository=repository)
     
-    # All should return valid ResolvedBundles
-    for result in [result1, result2, result3]:
+    # Name+version and digest should return same bundle
+    assert result1.manifest_digest == result2.manifest_digest
+    for result in [result1, result2]:
         assert result.manifest_digest.startswith("sha256:")
         assert isinstance(result.roles, dict)
         assert isinstance(result.layers, list)
@@ -167,13 +257,15 @@ def test_resolve_different_ref_types():
 # Materialize Function Tests
 # =============================================================================
 
-def test_materialize_creates_files_and_pointers(tmp_path):
+def test_materialize_creates_files_and_pointers(tmp_path, mock_registry_and_repo):
     """Test that materialize() creates ORAS files and pointer files."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
     
-    result = materialize(ref, dest, role="training", provider=provider)
+    result = materialize(ref, dest, role="training", provider=provider, registry=registry, repository=repository)
     
     # Should return same type as resolve()
     assert result.ref == ref
@@ -202,24 +294,28 @@ def test_materialize_creates_files_and_pointers(tmp_path):
     assert pointer_data["layer"] == "data"
 
 
-def test_materialize_idempotent(tmp_path):
+def test_materialize_idempotent(tmp_path, mock_registry_and_repo):
     """Test that calling materialize twice produces no conflicts."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
     
     # First materialization
-    result1 = materialize(ref, dest, role="runtime", provider=provider)
+    result1 = materialize(ref, dest, role="runtime", provider=provider, registry=registry, repository=repository)
     
     # Second materialization should not raise conflicts
-    result2 = materialize(ref, dest, role="runtime", provider=provider)
+    result2 = materialize(ref, dest, role="runtime", provider=provider, registry=registry, repository=repository)
     
     # Results should be identical
     assert result1.manifest_digest == result2.manifest_digest
 
 
-def test_materialize_conflict_no_overwrite(tmp_path):
+def test_materialize_conflict_no_overwrite(tmp_path, mock_registry_and_repo):
     """Test that materialize raises WorkdirConflict when overwrite=False."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
@@ -233,15 +329,16 @@ def test_materialize_conflict_no_overwrite(tmp_path):
     
     # Should raise WorkdirConflict with overwrite=False (default)
     with pytest.raises(WorkdirConflict) as exc_info:
-        materialize(ref, dest, role="runtime", provider=provider)
+        materialize(ref, dest, role="runtime", provider=provider, registry=registry, repository=repository)
     
     # Check exception details
     assert len(exc_info.value.conflicts) > 0
     assert "conflict" in str(exc_info.value).lower()
 
 
-def test_materialize_conflict_with_overwrite(tmp_path):
-    """Test that materialize replaces files when overwrite=True.""" 
+def test_materialize_conflict_with_overwrite(tmp_path, mock_registry_and_repo):
+    """Test that materialize replaces files when overwrite=True."""
+    registry, repository = mock_registry_and_repo
     ref = BundleRef(name="test", version="1.0")
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
@@ -254,7 +351,7 @@ def test_materialize_conflict_with_overwrite(tmp_path):
     conflicting_file.write_text("Different content")
     
     # Should succeed with overwrite=True
-    result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider)
+    result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider, registry=registry, repository=repository)
     assert result.manifest_digest.startswith("sha256:")
     
     # File should be replaced (if it was materialized)
@@ -264,13 +361,15 @@ def test_materialize_conflict_with_overwrite(tmp_path):
         assert new_content != "Different content"
 
 
-def test_materialize_pointer_file_location_and_schema(tmp_path):
+def test_materialize_pointer_file_location_and_schema(tmp_path, mock_registry_and_repo):
     """Test pointer file placement follows canonical rule."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0") 
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
     
-    materialize(ref, dest, role="training", provider=provider)  # Include data layer
+    materialize(ref, dest, role="training", provider=provider, registry=registry, repository=repository)  # Include data layer
     
     # Check pointer file is in correct location
     # Original: data/train.csv -> Pointer: .mops/ptr/data/train.csv.json
@@ -296,13 +395,15 @@ def test_materialize_pointer_file_location_and_schema(tmp_path):
         assert pointer_data["size"] >= 0
 
 
-def test_materialize_prefetch_external(tmp_path):
+def test_materialize_prefetch_external(tmp_path, mock_registry_and_repo):
     """Test prefetch_external=True downloads external data."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     dest = str(tmp_path / "workdir")
     provider = FakeProvider()
     
-    materialize(ref, dest, role="training", prefetch_external=True, provider=provider)
+    materialize(ref, dest, role="training", prefetch_external=True, provider=provider, registry=registry, repository=repository)
     
     # Both pointer file and actual file should exist
     pointer_path = Path(dest) / ".mops/ptr/data/train.csv.json"
@@ -325,22 +426,26 @@ def test_materialize_prefetch_external(tmp_path):
 # Error Condition Tests
 # =============================================================================
 
-def test_error_role_not_found():
+def test_error_role_not_found(mock_registry_and_repo):
     """Test error when requesting non-existent role."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     provider = FakeProvider()
     
     with pytest.raises(RoleLayerMismatch, match="Role 'nonexistent' not found"):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            materialize(ref, tmp_dir, role="nonexistent", provider=provider)
+            materialize(ref, tmp_dir, role="nonexistent", provider=provider, registry=registry, repository=repository)
 
 
-def test_error_role_with_missing_layers():
+def test_error_role_with_missing_layers(mock_registry_and_repo):
     """Test that role validation catches missing layer references."""
+    registry, repository = mock_registry_and_repo
+    
     # This test would be more relevant when we have real manifest parsing
     # For now, just test the validation logic directly
     ref = BundleRef(name="test", version="1.0")
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     
     # Create copy with role referencing missing layer
     broken_roles = {**resolved.roles, "broken": ["missing-layer"]}
@@ -364,18 +469,21 @@ def test_error_invalid_bundle_ref():
         ref = BundleRef()  # This should fail at the contracts level
 
 
-def test_materialize_requires_provider():
+def test_materialize_requires_provider(mock_registry_and_repo):
     """Test that materialize() requires a provider parameter."""
     ref = BundleRef(name="test", version="1.0")
     
+    registry, repository = mock_registry_and_repo
     # Should fail without provider parameter
     with pytest.raises(TypeError, match="missing.*required.*provider"):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            materialize(ref, tmp_dir)
+            materialize(ref, tmp_dir, registry=registry, repository=repository)
 
 
-def test_materialize_rejects_missing_layer():
+def test_materialize_rejects_missing_layer(mock_registry_and_repo):
     """Test that materialize rejects roles referencing non-existent layers."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     provider = FakeProvider()
     
@@ -389,8 +497,10 @@ def test_materialize_rejects_missing_layer():
     assert "['a-layer', 'm-layer', 'z-layer']" in str(exc_info.value)
 
 
-def test_provider_duplicate_paths_rejected():
+def test_provider_duplicate_paths_rejected(mock_registry_and_repo):
     """Test that duplicate paths from provider are rejected."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry
     
     class DuplicateProvider:
@@ -408,11 +518,13 @@ def test_provider_duplicate_paths_rejected():
     
     with pytest.raises(WorkdirConflict, match="Duplicate materialization path"):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            materialize(ref, tmp_dir, role="runtime", provider=provider)
+            materialize(ref, tmp_dir, role="runtime", provider=provider, registry=registry, repository=repository)
 
 
-def test_materialize_dir_vs_file_conflict(tmp_path):
+def test_materialize_dir_vs_file_conflict(tmp_path, mock_registry_and_repo):
     """Test conflict handling when directory exists where file expected."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     provider = FakeProvider()
     dest = str(tmp_path / "workdir")
@@ -425,10 +537,10 @@ def test_materialize_dir_vs_file_conflict(tmp_path):
     
     # Should raise conflict when overwrite=False
     with pytest.raises(WorkdirConflict, match="files conflict with existing content"):
-        materialize(ref, dest, role="runtime", overwrite=False, provider=provider)
+        materialize(ref, dest, role="runtime", overwrite=False, provider=provider, registry=registry, repository=repository)
     
     # Should replace when overwrite=True
-    result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider)
+    result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider, registry=registry, repository=repository)
     assert result.manifest_digest.startswith("sha256:")
     
     # Directory should be gone, file should exist
@@ -437,8 +549,10 @@ def test_materialize_dir_vs_file_conflict(tmp_path):
     assert not file_path.is_dir()
 
 
-def test_duplicate_paths_across_layers():
+def test_duplicate_paths_across_layers(mock_registry_and_repo):
     """Test that duplicate paths from different layers are rejected."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry
     
     class CrossLayerDuplicateProvider:
@@ -455,7 +569,7 @@ def test_duplicate_paths_across_layers():
     
     with pytest.raises(WorkdirConflict, match="Duplicate materialization path"):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            materialize(ref, tmp_dir, role="runtime", provider=provider)
+            materialize(ref, tmp_dir, role="runtime", provider=provider, registry=registry, repository=repository)
 
 
 def test_temp_file_cleanup_on_error(tmp_path):
@@ -482,36 +596,40 @@ def test_temp_file_cleanup_on_error(tmp_path):
 # Integration Tests
 # =============================================================================
 
-def test_resolve_then_materialize_integration(tmp_path):
+def test_resolve_then_materialize_integration(tmp_path, mock_registry_and_repo):
     """Test full resolve -> materialize workflow."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="integration-test", version="2.0")
     provider = FakeProvider()
     
     # First resolve 
-    resolved = resolve(ref)
+    resolved = resolve(ref, registry=registry, repository=repository)
     assert resolved.manifest_digest.startswith("sha256:")
     
     # Then materialize using the same ref
     dest = str(tmp_path / "integration")
-    materialized = materialize(ref, dest, role="default", provider=provider)
+    materialized = materialize(ref, dest, role="default", provider=provider, registry=registry, repository=repository)
     
     # Results should have same digest (same bundle)
     assert resolved.manifest_digest == materialized.manifest_digest
     assert resolved.roles == materialized.roles
 
 
-def test_different_roles_materialize_different_content(tmp_path):
+def test_different_roles_materialize_different_content(tmp_path, mock_registry_and_repo):
     """Test that different roles materialize different sets of files."""
+    registry, repository = mock_registry_and_repo
+    
     ref = BundleRef(name="test", version="1.0")
     provider = FakeProvider()
     
     # Materialize minimal role
     runtime_dest = str(tmp_path / "runtime")
-    materialize(ref, runtime_dest, role="runtime", provider=provider)
+    materialize(ref, runtime_dest, role="runtime", provider=provider, registry=registry, repository=repository)
     
     # Materialize full role  
     training_dest = str(tmp_path / "training")
-    materialize(ref, training_dest, role="training", provider=provider)
+    materialize(ref, training_dest, role="training", provider=provider, registry=registry, repository=repository)
     
     # Both should have basic files, but training should have data
     runtime_files = list(Path(runtime_dest).rglob("*"))
@@ -522,8 +640,10 @@ def test_different_roles_materialize_different_content(tmp_path):
     assert len(training_files) >= len(runtime_files)
 
 
-def test_path_traversal_attacks_rejected(tmp_path):
+def test_path_traversal_attacks_rejected(tmp_path, mock_registry_and_repo):
     """Test that materialize rejects dangerous paths that could escape destination."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry, ContentProvider
     from modelops_contracts.artifacts import ResolvedBundle
     from typing import Iterable
@@ -556,16 +676,18 @@ def test_path_traversal_attacks_rejected(tmp_path):
         def fetch_external(self, entry: MatEntry) -> bytes:
             return b"not used"
     
-    ref = BundleRef(name="evil-bundle", version="1.0.0")
+    ref = BundleRef(name="test", version="1.0")
     evil_provider = EvilProvider()
     
     # Each dangerous path should be rejected with ValueError
     with pytest.raises(ValueError, match="unsafe path"):
-        materialize(ref, str(tmp_path), role="runtime", provider=evil_provider)
+        materialize(ref, str(tmp_path), role="runtime", provider=evil_provider, registry=registry, repository=repository)
 
 
-def test_external_prefetch_honors_overwrite_rules(tmp_path):
+def test_external_prefetch_honors_overwrite_rules(tmp_path, mock_registry_and_repo):
     """Test that prefetched external files respect overwrite/conflict rules."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry, ContentProvider
     from modelops_contracts.artifacts import ResolvedBundle
     from typing import Iterable
@@ -593,24 +715,26 @@ def test_external_prefetch_honors_overwrite_rules(tmp_path):
         def fetch_external(self, entry: MatEntry) -> bytes:
             return b"new content!"
     
-    ref = BundleRef(name="test-bundle", version="1.0.0")
+    ref = BundleRef(name="test", version="1.0")
     provider = ExternalPrefetchProvider()
     
     # Without overwrite=True, should detect conflict and raise WorkdirConflict
     with pytest.raises(WorkdirConflict):
         materialize(ref, str(tmp_path), role="runtime", provider=provider, 
-                   prefetch_external=True, overwrite=False)
+                   prefetch_external=True, overwrite=False, registry=registry, repository=repository)
     
     # With overwrite=True, should succeed and replace content
     result = materialize(ref, str(tmp_path), role="runtime", provider=provider,
-                        prefetch_external=True, overwrite=True)
+                        prefetch_external=True, overwrite=True, registry=registry, repository=repository)
     
     # Verify file was replaced with new content
     assert existing_file.read_text() == "new content!"
 
 
-def test_pointer_overwrite_semantics(tmp_path):
+def test_pointer_overwrite_semantics(tmp_path, mock_registry_and_repo):
     """Test that pointer files are always overwritten (system-owned files)."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry, ContentProvider
     from modelops_contracts.artifacts import ResolvedBundle
     from collections.abc import Iterable
@@ -636,11 +760,11 @@ def test_pointer_overwrite_semantics(tmp_path):
         def fetch_external(self, entry: MatEntry) -> bytes:
             return b"x" * 100  # Fixed content, only tier changes
     
-    ref = BundleRef(name="tier-test", version="1.0.0")
+    ref = BundleRef(name="test", version="1.0")
     
     # First materialization with "hot" tier  
     provider1 = ExternalTierChangeProvider("hot")
-    materialize(ref, str(tmp_path), role="runtime", provider=provider1, prefetch_external=False)
+    materialize(ref, str(tmp_path), role="runtime", provider=provider1, prefetch_external=False, registry=registry, repository=repository)
     
     pointer_path = tmp_path / ".mops" / "ptr" / "data" / "file.txt.json"
     assert pointer_path.exists()
@@ -656,7 +780,7 @@ def test_pointer_overwrite_semantics(tmp_path):
     # Second materialization with "cool" tier - should update pointer without conflict
     provider2 = ExternalTierChangeProvider("cool") 
     result = materialize(ref, str(tmp_path), role="runtime", provider=provider2, 
-                        prefetch_external=False, overwrite=False)  # No overwrite needed
+                        prefetch_external=False, overwrite=False, registry=registry, repository=repository)  # No overwrite needed
     
     # Verify pointer was updated (system-owned file)
     with open(pointer_path, 'r') as f:
@@ -667,8 +791,10 @@ def test_pointer_overwrite_semantics(tmp_path):
     assert second_pointer["fulfilled"] is False  # Still not prefetched
 
 
-def test_pointer_deterministic_creation(tmp_path):
+def test_pointer_deterministic_creation(tmp_path, mock_registry_and_repo):
     """Test that pointer files are created deterministically."""
+    registry, repository = mock_registry_and_repo
+    
     from modelops_bundles.runtime_types import MatEntry, ContentProvider
     from modelops_contracts.artifacts import ResolvedBundle
     from collections.abc import Iterable
@@ -691,11 +817,11 @@ def test_pointer_deterministic_creation(tmp_path):
         def fetch_external(self, entry: MatEntry) -> bytes:
             return b"deterministic content"
     
-    ref = BundleRef(digest="sha256:" + "a" * 64)
+    ref = BundleRef(name="test", version="1.0")
     provider = DeterministicProvider()
     
     # Create first materialization
-    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False)
+    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False, registry=registry, repository=repository)
     
     pointer_path = tmp_path / ".mops" / "ptr" / "test.txt.json"
     first_content = pointer_path.read_text(encoding='utf-8')
@@ -706,7 +832,7 @@ def test_pointer_deterministic_creation(tmp_path):
     tmp_path.mkdir()
     
     # Create identical materialization
-    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False)
+    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False, registry=registry, repository=repository)
     
     second_content = pointer_path.read_text(encoding='utf-8')
     

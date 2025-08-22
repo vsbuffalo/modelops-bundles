@@ -9,15 +9,36 @@ from __future__ import annotations
 import hashlib
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize, WorkdirConflict
 from modelops_bundles.runtime_types import MatEntry
 from modelops_bundles.runtime_types import ContentProvider
+from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
 class TestPrefetchIntegrity:
     """Test SHA256 verification during external content prefetch."""
+    
+    def _create_test_setup(self):
+        """Create test registry and mock resolved bundle."""
+        registry = FakeBundleRegistryStore()
+        repository = "test/repo"
+        
+        # Create a mock resolved bundle
+        resolved = ResolvedBundle(
+            ref=BundleRef(digest="sha256:" + "a" * 64),
+            manifest_digest="sha256:" + "b" * 64,
+            roles={"default": ["data"]},
+            layers=["data"],
+            external_index_present=True,
+            total_size=100,
+            cache_dir=None,
+            layer_indexes={"data": "sha256:" + "c" * 64}
+        )
+        
+        return registry, repository, resolved
     
     def test_prefetch_sha256_mismatch_raises_conflict(self, tmp_path):
         """Test that SHA256 mismatch during prefetch raises WorkdirConflict."""
@@ -42,18 +63,23 @@ class TestPrefetchIntegrity:
                 return corrupt_data  # Returns corrupt data that doesn't match SHA
         
         provider = CorruptProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(digest="sha256:" + "a" * 64)
         
-        # Materialize with prefetch should detect SHA mismatch and raise conflict
-        with pytest.raises(WorkdirConflict) as exc_info:
-            materialize(
-                ref=ref,
-                dest=str(tmp_path),
-                role="default",
-                provider=provider,
-                prefetch_external=True
-            )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # Materialize with prefetch should detect SHA mismatch and raise conflict
+            with pytest.raises(WorkdirConflict) as exc_info:
+                materialize(
+                    ref=ref,
+                    dest=str(tmp_path),
+                    role="default",
+                    provider=provider,
+                    prefetch_external=True,
+                    registry=registry,
+                    repository=repository
+                )
         
         # Verify the conflict details
         error = exc_info.value
@@ -85,17 +111,22 @@ class TestPrefetchIntegrity:
                 return correct_data  # Returns correct data that matches SHA
         
         provider = GoodProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(digest="sha256:" + "b" * 64)
         
-        # Should succeed without raising WorkdirConflict
-        result = materialize(
-            ref=ref,
-            dest=str(tmp_path),
-            role="default",
-            provider=provider,
-            prefetch_external=True
-        )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # Should succeed without raising WorkdirConflict
+            result = materialize(
+                ref=ref,
+                dest=str(tmp_path),
+                role="default",
+                provider=provider,
+                prefetch_external=True,
+                registry=registry,
+                repository=repository
+            )
         
         # Verify data was written correctly
         data_path = tmp_path / "data" / "correct.txt"
@@ -136,17 +167,22 @@ class TestPrefetchIntegrity:
                 return corrupt_data  # This shouldn't be called with prefetch=False
         
         provider = PointerOnlyProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(digest="sha256:" + "c" * 64)
         
-        # Should succeed because prefetch is disabled (no integrity check)
-        result = materialize(
-            ref=ref,
-            dest=str(tmp_path),
-            role="default",
-            provider=provider,
-            prefetch_external=False  # Only create pointer, don't fetch data
-        )
+        # Mock resolve to return our test resolved bundle
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # Should succeed because prefetch is disabled (no integrity check)
+            result = materialize(
+                ref=ref,
+                dest=str(tmp_path),
+                role="default",
+                provider=provider,
+                prefetch_external=False,  # Only create pointer, don't fetch data
+                registry=registry,
+                repository=repository
+            )
         
         # Verify actual data file was NOT created
         data_path = tmp_path / "data" / "pointer_only.txt"
@@ -200,18 +236,23 @@ class TestPrefetchIntegrity:
                     return corrupt_data  # Wrong data for expected hash
         
         provider = MixedProvider()
+        registry, repository, resolved = self._create_test_setup()
         
         ref = BundleRef(digest="sha256:" + "d" * 64)
         
-        # Should raise conflict due to corrupt file
-        with pytest.raises(WorkdirConflict) as exc_info:
-            materialize(
-                ref=ref,
-                dest=str(tmp_path),
-                role="default", 
-                provider=provider,
-                prefetch_external=True
-            )
+        # Mock resolve to return our test resolved bundle  
+        with patch('modelops_bundles.runtime.resolve', return_value=resolved):
+            # Should raise conflict due to corrupt file
+            with pytest.raises(WorkdirConflict) as exc_info:
+                materialize(
+                    ref=ref,
+                    dest=str(tmp_path),
+                    role="default", 
+                    provider=provider,
+                    prefetch_external=True,
+                    registry=registry,
+                    repository=repository
+                )
         
         # Verify only the corrupt file is in conflicts
         error = exc_info.value
