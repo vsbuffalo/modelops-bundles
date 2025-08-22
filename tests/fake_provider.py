@@ -89,5 +89,5 @@ class FakeProvider(ContentProvider):
     
     def fetch_external(self, entry: MatEntry) -> bytes:
         """Fetch fake external content for testing."""
-        # Predictable content for tests
-        return (f"External content for {entry.path}\nURI: {entry.uri}\n").encode()
+        # Return content that matches the expected SHA256 from iter_entries
+        return f"fake-bytes-for:{entry.path}".encode()

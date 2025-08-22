@@ -52,6 +52,25 @@ class TestSafeRelpath:
         
         with pytest.raises(ValueError, match="unsafe path: .mops/anything"):
             safe_relpath(".mops/anything")
+        
+        # Test bare .mops rejection
+        with pytest.raises(ValueError, match="unsafe path: .mops"):
+            safe_relpath(".mops")
+    
+    def test_backslash_paths_rejected(self):
+        """Test that paths containing backslashes are rejected (Windows security)."""
+        dangerous_paths = [
+            "a\\b\\c.txt",
+            "..\\..\\etc\\passwd",
+            "data\\..\\..\\secrets.txt",
+            "normal\\path\\file.txt",
+            "mixed/path\\with\\backslashes",
+            "\\absolute\\windows\\path",
+        ]
+        
+        for path in dangerous_paths:
+            with pytest.raises(ValueError, match="unsafe path"):
+                safe_relpath(path)
 
 
 class TestPointerWriterPathSafety:

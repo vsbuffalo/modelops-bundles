@@ -38,8 +38,8 @@ class PointerFile(BaseModel):
         description="Storage tier hint (hot/cool/archive)"
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        description="UTC timestamp when pointer was created"
+        default_factory=lambda: datetime(1970, 1, 1, tzinfo=timezone.utc),
+        description="Deterministic timestamp for export consistency (epoch)"
     )
     fulfilled: bool = Field(
         default=False,

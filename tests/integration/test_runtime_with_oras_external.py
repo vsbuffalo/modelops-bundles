@@ -184,8 +184,10 @@ class TestRuntimeWithOrasExternal:
             dest_path = Path(dest)
             assert (dest_path / "src/main.py").read_bytes() == code_py
 
-            # Should NOT have any pointer files (no data layer requested)
-            assert not (dest_path / ".mops").exists()
+            # Should have provenance file but NO pointer files (no data layer requested)
+            assert (dest_path / ".mops" / ".mops-manifest.json").exists()
+            ptr_dir = dest_path / ".mops" / "ptr"
+            assert not ptr_dir.exists() or len(list(ptr_dir.rglob("*.json"))) == 0
 
         finally:
             rt.resolve = original_resolve

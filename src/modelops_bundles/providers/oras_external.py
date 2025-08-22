@@ -13,8 +13,9 @@ from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
 from ..runtime_types import ContentProvider, MatEntry
 from ..storage.base import ExternalStore, OrasStore
+from ..path_safety import safe_relpath
 
-__all__ = ["OrasExternalProvider"]
+__all__ = ["OrasExternalProvider", "default_provider_from_env"]
 
 
 def _short_digest(digest: str) -> str:
@@ -83,14 +84,21 @@ class OrasExternalProvider(ContentProvider):
             except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 raise ValueError(f"invalid JSON in index for layer '{layer}': {e}")
                 
-            if doc.get("mediaType") != LAYER_INDEX:
-                raise ValueError(f"invalid mediaType for layer '{layer}': expected {LAYER_INDEX}")
+            mt = doc.get("mediaType")
+            if mt != LAYER_INDEX:
+                raise ValueError(f"invalid mediaType for layer '{layer}': expected {LAYER_INDEX}, got {mt!r}")
             
             # 3. Process each entry
             for entry in doc.get("entries", []):
                 path = entry.get("path")
                 if not path:
                     raise ValueError(f"entry missing 'path' in layer '{layer}'")
+                
+                # Validate path early for reserved/unsafe paths
+                try:
+                    safe_relpath(path)
+                except ValueError as e:
+                    raise ValueError(f"invalid path '{path}' in layer '{layer}': {e}") from e
                 
                 # Check layer field if present
                 if "layer" in entry and entry["layer"] != layer:
@@ -125,6 +133,16 @@ class OrasExternalProvider(ContentProvider):
                     )
                 else:  # has_digest
                     digest = entry["digest"]
+                    
+                    # Validate digest format
+                    if not digest or not isinstance(digest, str):
+                        raise ValueError(f"invalid digest for layer '{layer}' path '{path}': must be non-empty string")
+                    if not digest.startswith("sha256:") or len(digest) != 71:
+                        raise ValueError(f"invalid digest format for layer '{layer}' path '{path}': expected 'sha256:<64 hex chars>', got '{digest}'")
+                    hex_part = digest[7:]  # Remove "sha256:" prefix
+                    if not all(c in '0123456789abcdef' for c in hex_part):
+                        raise ValueError(f"invalid digest format for layer '{layer}' path '{path}': contains non-hex characters")
+                    
                     try:
                         blob = self._oras.get_blob(digest)
                     except KeyError:
@@ -155,4 +173,39 @@ class OrasExternalProvider(ContentProvider):
         if entry.uri is None:
             raise ValueError("external entry missing uri")
         return self._external.get(entry.uri)
+
+
+def default_provider_from_env() -> OrasExternalProvider:
+    """
+    Create OrasExternalProvider with real adapters from environment settings.
+    
+    This is the standard entry point for production use and CLI integration.
+    Loads settings from environment variables and creates real ORAS and 
+    external storage adapters.
+    
+    Returns:
+        OrasExternalProvider configured with real adapters
+        
+    Raises:
+        ValueError: If required configuration is missing
+        ImportError: If required adapter dependencies are missing
+        
+    Example:
+        >>> provider = default_provider_from_env()
+        >>> # Use with runtime.materialize(ref, dest, provider=provider)
+    """
+    from ..settings import load_settings_from_env
+    from ..storage.oras import OrasAdapter
+    from ..storage.object_store import AzureExternalAdapter
+    
+    settings = load_settings_from_env()
+    
+    # Create real adapters
+    oras_adapter = OrasAdapter(settings=settings)
+    external_adapter = AzureExternalAdapter(settings=settings)
+    
+    return OrasExternalProvider(
+        oras=oras_adapter,
+        external=external_adapter
+    )
 

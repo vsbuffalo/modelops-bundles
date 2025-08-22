@@ -14,9 +14,10 @@ def safe_relpath(path: str) -> str:
     Validate and normalize a user-provided path to prevent traversal attacks.
     
     This function enforces the following safety rules:
+    - No empty strings or "." (prevents root directory access)
     - No absolute paths (starting with '/')
     - No parent directory references ('..' components)
-    - No paths starting with '.mops/' (reserved metadata area)
+    - No paths starting with '.mops/' or equal to '.mops' (reserved metadata area)
     
     Args:
         path: User-provided path string
@@ -31,13 +32,27 @@ def safe_relpath(path: str) -> str:
         >>> safe_relpath("src/model.py")
         'src/model.py'
         
+        >>> safe_relpath("")
+        ValueError: unsafe path: 
+        
+        >>> safe_relpath(".")
+        ValueError: unsafe path: .
+        
         >>> safe_relpath("../secrets.txt")
         ValueError: unsafe path: ../secrets.txt
+        
+        >>> safe_relpath(".mops")
+        ValueError: unsafe path: .mops
         
         >>> safe_relpath(".mops/hijack.json")
         ValueError: unsafe path: .mops/hijack.json
     """
     rel = PurePosixPath(path)
-    if rel.is_absolute() or ".." in rel.parts or str(rel).startswith(".mops/"):
+    s = str(rel)
+    if not s or s == ".":
         raise ValueError(f"unsafe path: {path}")
-    return str(rel)
+    if "\\" in s:
+        raise ValueError(f"unsafe path: {path}")
+    if rel.is_absolute() or ".." in rel.parts or s == ".mops" or s.startswith(".mops/"):
+        raise ValueError(f"unsafe path: {path}")
+    return s

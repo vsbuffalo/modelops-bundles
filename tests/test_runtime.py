@@ -318,8 +318,7 @@ def test_materialize_prefetch_external(tmp_path):
     if actual_path.exists():
         # Check actual file was created with FakeProvider content
         content = actual_path.read_text()
-        assert content.startswith("External content for data/train.csv")
-        assert "URI: az://fake-container/" in content
+        assert content == "fake-bytes-for:data/train.csv"
 
 
 # =============================================================================
@@ -586,7 +585,7 @@ def test_external_prefetch_honors_overwrite_rules(tmp_path):
                 kind="external", 
                 content=None,
                 uri="az://test/data.txt",
-                sha256="a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+                sha256="df72caba10e0b5c8f28f9bd2100bd0b7905ea953bef6cd9f81cae1548bf459e1",
                 size=12,
                 tier=None
             )
@@ -608,3 +607,113 @@ def test_external_prefetch_honors_overwrite_rules(tmp_path):
     
     # Verify file was replaced with new content
     assert existing_file.read_text() == "new content!"
+
+
+def test_pointer_overwrite_semantics(tmp_path):
+    """Test that pointer files are always overwritten (system-owned files)."""
+    from modelops_bundles.runtime_types import MatEntry, ContentProvider
+    from modelops_contracts.artifacts import ResolvedBundle
+    from collections.abc import Iterable
+    
+    class ExternalTierChangeProvider(ContentProvider):
+        """Provider that changes tier metadata between materializations."""
+        
+        def __init__(self, tier: str):
+            self.tier = tier
+        
+        def iter_entries(self, resolved: ResolvedBundle, layers: list[str]) -> Iterable[MatEntry]:
+            yield MatEntry(
+                path="data/file.txt",
+                layer="data",
+                kind="external",
+                content=None,
+                uri="az://test/file.txt",
+                sha256="09ecb6ebc8bcefc733f6f2ec44f791abeed6a99edf0cc31519637898aebd52d8", 
+                size=100,
+                tier=self.tier  # This will change between calls
+            )
+        
+        def fetch_external(self, entry: MatEntry) -> bytes:
+            return b"x" * 100  # Fixed content, only tier changes
+    
+    ref = BundleRef(name="tier-test", version="1.0.0")
+    
+    # First materialization with "hot" tier  
+    provider1 = ExternalTierChangeProvider("hot")
+    materialize(ref, str(tmp_path), role="runtime", provider=provider1, prefetch_external=False)
+    
+    pointer_path = tmp_path / ".mops" / "ptr" / "data" / "file.txt.json"
+    assert pointer_path.exists()
+    
+    # Read initial pointer data
+    import json
+    with open(pointer_path, 'r') as f:
+        first_pointer = json.load(f)
+    
+    assert first_pointer["tier"] == "hot"
+    assert first_pointer["fulfilled"] is False
+    
+    # Second materialization with "cool" tier - should update pointer without conflict
+    provider2 = ExternalTierChangeProvider("cool") 
+    result = materialize(ref, str(tmp_path), role="runtime", provider=provider2, 
+                        prefetch_external=False, overwrite=False)  # No overwrite needed
+    
+    # Verify pointer was updated (system-owned file)
+    with open(pointer_path, 'r') as f:
+        second_pointer = json.load(f)
+    
+    assert second_pointer["tier"] == "cool"  # Changed
+    assert second_pointer["sha256"] == first_pointer["sha256"]  # Same content
+    assert second_pointer["fulfilled"] is False  # Still not prefetched
+
+
+def test_pointer_deterministic_creation(tmp_path):
+    """Test that pointer files are created deterministically."""
+    from modelops_bundles.runtime_types import MatEntry, ContentProvider
+    from modelops_contracts.artifacts import ResolvedBundle
+    from collections.abc import Iterable
+    
+    class DeterministicProvider(ContentProvider):
+        """Provider with deterministic external data."""
+        
+        def iter_entries(self, resolved: ResolvedBundle, layers: list[str]) -> Iterable[MatEntry]:
+            yield MatEntry(
+                path="test.txt", 
+                layer="data",
+                kind="external",
+                content=None,
+                uri="az://bucket/test.txt",
+                sha256="b" * 64,
+                size=42,
+                tier="archive"
+            )
+        
+        def fetch_external(self, entry: MatEntry) -> bytes:
+            return b"deterministic content"
+    
+    ref = BundleRef(digest="sha256:" + "a" * 64)
+    provider = DeterministicProvider()
+    
+    # Create first materialization
+    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False)
+    
+    pointer_path = tmp_path / ".mops" / "ptr" / "test.txt.json"
+    first_content = pointer_path.read_text(encoding='utf-8')
+    
+    # Remove the materialization
+    import shutil
+    shutil.rmtree(tmp_path)
+    tmp_path.mkdir()
+    
+    # Create identical materialization
+    materialize(ref, str(tmp_path), role="default", provider=provider, prefetch_external=False)
+    
+    second_content = pointer_path.read_text(encoding='utf-8')
+    
+    # Verify identical JSON output (deterministic)
+    assert first_content == second_content
+    
+    # Verify the timestamp is deterministic (epoch time)
+    import json
+    pointer_data = json.loads(second_content)
+    assert pointer_data["created_at"] == "1970-01-01T00:00:00Z"

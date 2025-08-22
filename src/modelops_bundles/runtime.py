@@ -8,6 +8,7 @@ semantics, and pointer file placement.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Dict, List
@@ -103,6 +104,14 @@ def resolve(ref: BundleRef, *, cache: bool = True) -> ResolvedBundle:
     }
     fake_layers = ["code", "config", "data"]
     
+    # Generate fake layer index digests for testing
+    # In real implementation, these would be actual layer index manifest digests
+    fake_layer_indexes = {}
+    for layer in fake_layers:
+        content = f"fake-layer-index:{fake_digest}:{layer}"
+        layer_digest = "sha256:" + hashlib.sha256(content.encode()).hexdigest()
+        fake_layer_indexes[layer] = layer_digest
+    
     return ResolvedBundle(
         ref=ref,
         manifest_digest=fake_digest,
@@ -110,7 +119,8 @@ def resolve(ref: BundleRef, *, cache: bool = True) -> ResolvedBundle:
         layers=fake_layers,
         external_index_present=True,  # Assume external data exists for testing
         total_size=1024 * 1024,  # 1MB fake size
-        cache_dir=None  # No cache implementation in Stage 1
+        cache_dir=None,  # No cache implementation in Stage 1
+        layer_indexes=fake_layer_indexes
     )
 
 
@@ -213,6 +223,9 @@ def materialize(
             f"{len(conflicts)} files conflict with existing content",
             conflicts
         )
+    
+    # Write provenance file with materialization metadata
+    _write_provenance(dest_path, resolved, selected_role)
     
     return resolved
 
@@ -355,12 +368,24 @@ def _materialize_external_file(
     
     # If prefetch_external=True, fetch and write actual content first
     if prefetch_external:
-        actual_path = dest_path / entry.path
+        actual_path = dest_path / safe_relpath(entry.path)
         content = provider.fetch_external(entry)
+        
+        # Verify SHA256 integrity before writing
+        got = hashlib.sha256(content).hexdigest()
+        if got != entry.sha256:
+            conflicts.append({
+                "path": entry.path,
+                "expected_sha256": entry.sha256,
+                "actual_sha256": got
+            })
+            return
+        
         # Use _materialize_oras_file for conflict detection and overwrite handling
         _materialize_oras_file(actual_path, content, overwrite, conflicts, base_dir)
     
     # Write pointer file only after successful content write (if prefetching)
+    sanitized_path = safe_relpath(entry.path)
     write_pointer_file(
         dest_dir=dest_path,
         original_relpath=entry.path,
@@ -370,7 +395,7 @@ def _materialize_external_file(
         layer=entry.layer,
         tier=entry.tier,  # Pass through as-is - tier is optional hint only
         fulfilled=prefetch_external,
-        local_path=entry.path if prefetch_external else None
+        local_path=sanitized_path if prefetch_external else None
     )
 
 
@@ -401,6 +426,45 @@ def _write_file_atomically(target_path: Path, content: bytes) -> None:
         # Clean up temp file on error
         if temp_path.exists():
             temp_path.unlink()
+        raise
+
+
+def _write_provenance(dest_path: Path, resolved: ResolvedBundle, role: str) -> None:
+    """
+    Write provenance file containing materialization metadata.
+    
+    Creates .mops/.mops-manifest.json with bundle information including
+    manifest digest, selected role, layer indexes, and original reference.
+    
+    Args:
+        dest_path: Destination directory path
+        resolved: ResolvedBundle with metadata
+        role: Selected role name
+    """
+    meta_dir = dest_path / ".mops"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    out = meta_dir / ".mops-manifest.json"
+    
+    payload = {
+        "manifest_digest": resolved.manifest_digest,
+        "media_type": getattr(resolved, "media_type", "application/vnd.modelops.bundle.manifest+json"),
+        "role": role,
+        "roles": resolved.roles,
+        "layer_indexes": resolved.layer_indexes,
+        "ref": resolved.ref.model_dump() if hasattr(resolved.ref, "model_dump") else resolved.ref.__dict__,
+    }
+    
+    tmp = out.with_name(out.name + f".tmp.{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, out)
+    except Exception:
+        # Clean up temp file on error
+        if tmp.exists():
+            tmp.unlink()
         raise
 
 
