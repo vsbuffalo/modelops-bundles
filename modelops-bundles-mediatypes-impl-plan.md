@@ -649,6 +649,17 @@ As shown in the architecture diagram above, this layered design provides:
 
 ---
 
+### 4.9.1 CLI ↔ Runtime Mapping (normative)
+
+The modelops bundles CLI is a thin wrapper over the runtime:
+• **resolve** → `resolve(BundleRef, cache=...)`
+• **materialize** → `materialize(BundleRef, dest=…, role=…, overwrite=…, prefetch_external=…, provider=…)`
+• **export** (see §21) reads a materialized tree and produces a deterministic archive. export never calls providers or fetches bytes; it operates solely on the local filesystem state.
+
+All CLI features MUST preserve the same semantics and exit codes defined in §9.
+
+---
+
 ## 4.10) Storage Abstractions (runtime–provider seam)
 
 To keep the runtime pure and testable, storage concerns are factored behind two
@@ -756,6 +767,86 @@ Import only in test code.
 
 ---
 
+## 4.11) Operations Facade (Application Service Layer)
+
+### Purpose
+
+To keep CLI commands thin and testable, introduce an **Operations facade** between Typer and the runtime APIs. This facade centralizes command orchestration, error mapping, and output formatting while maintaining clean separation of concerns.
+
+### Responsibilities
+
+**What the facade owns:**
+• **Command use-cases**: One method per CLI verb (`resolve`, `materialize`, `pull`, `push`, `scan`, `plan`, `diff`, `export`)
+• **Input validation & normalization**: CLI args → contract DTOs  
+• **Error mapping**: Exceptions → standardized exit codes (§9)
+• **Output shaping**: Human text or JSON formatting (when enabled)
+• **Policy centralization**: Determinism toggles, logging boundaries, configuration
+
+**What it must NOT own:**
+• Registry/blob logic (delegated to providers/stores)
+• Filesystem primitives beyond orchestrating runtime/export calls  
+• Global mutable state (config passed explicitly)
+
+### Interface Design
+
+```python
+@dataclass(frozen=True)
+class OpsConfig:
+    cache_dir: Optional[str] = None
+    ci: bool = False  
+    human: bool = True
+    zstd_level: Optional[int] = None  # pinned for determinism
+
+class Operations:
+    def __init__(self, config: OpsConfig, provider: Optional[ContentProvider] = None):
+        self.cfg = config
+        self.provider = provider
+
+    def resolve(self, ref: BundleRef, *, cache: bool = True) -> ResolvedBundle:
+        return runtime.resolve(ref, cache=cache)
+        
+    def materialize(self, ref: BundleRef, dest: str, *,
+                    role: Optional[str], overwrite: bool, 
+                    prefetch_external: bool) -> ResolvedBundle:
+        assert self.provider, "provider required for materialize"
+        return runtime.materialize(ref, dest=dest, role=role,
+                                   overwrite=overwrite,
+                                   prefetch_external=prefetch_external,
+                                   provider=self.provider)
+
+    def export(self, src_dir: str, out_path: str, *,
+               include_external: bool = False) -> None:
+        export.write_deterministic_archive(src_dir, out_path,
+                                           include_external=include_external,
+                                           zstd_level=self.cfg.zstd_level)
+```
+
+### CLI Integration
+
+Typer commands stay thin (5-15 lines each):
+
+```python
+@app.command()
+def materialize(name: str = None, dest: str = ".", role: str = None):
+    ref = BundleRef(name=name)
+    try:
+        ops().materialize(ref, dest=dest, role=role, overwrite=False, prefetch_external=False)
+        typer.echo(f"Materialized {ref.name} to {dest}")
+    except Exception as e:
+        raise typer.Exit(code=map_errors_to_exit_code(e))
+```
+
+### Testing Benefits
+
+• **Unit test Operations methods** with fakes (no Typer/CLI involved)
+• **Centralized error policy**: Test `map_errors_to_exit_code()` once  
+• **Deterministic export testing**: Call `Operations.export()` twice, compare SHA-256
+• **CLI smoke tests**: Patch Operations with minimal fakes
+
+This facade provides the right amount of structure for Stage 5: keeps CLI maintainable, maximizes testability, and centralizes policy without over-engineering.
+
+---
+
 ## 5) Minimal Cache 
 
 **Cache Structure:**
@@ -817,6 +908,7 @@ This satisfies the core requirement: **workspaces are mirrored from the user’s
 
 - `modelops-bundles` provides a **standalone Typer** CLI: `mops-bundles ...`.
 - `modelops` exposes it under the umbrella CLI as a **plugin**: `modelops bundles ...` via entry points:
+- CLI commands are kept thin (5-15 lines each) by delegating to the **Operations facade** (§4.11) for orchestration, error mapping, and policy centralization.
 
 `modelops-bundles/pyproject.toml`:
 ```toml
@@ -907,11 +999,23 @@ modelops bundles export epi-abm:latest --output bundle.tar.zst
 # Include actual external data
 modelops bundles export epi-abm:latest --output bundle.tar.zst --include-external
 
+# Deterministic export of a materialized workdir
+modelops bundles export ./workdir --output bundle.tar
+# or (if compression is enabled in build)
+modelops bundles export ./workdir --output bundle.tar.zst
+
 # Import from archive
 modelops bundles import bundle.tar.zst
 ```
 
 Archives use tar with zstd compression for good balance of speed/compression. Use cases include air-gapped deployments, backup/archival, and sneakernet transfer to isolated systems.
+
+### 7.3 CLI Output & Exit Semantics (normative)
+
+• **Output modes**: human text (default) and structured JSON (`--json`) where defined in this spec.
+• **Progress/UI**: suppressed when `--json` or `CI=true`.
+• **Exit codes**: as per §9; export additionally uses ValidationError (2) for non-canonical trees (see §21.2).
+• **Determinism guarantee**: export MUST produce byte-identical archives for identical input trees across hosts and runs (see §21).
 
 ---
 
@@ -1019,6 +1123,17 @@ All commands support `--json` for machine-readable output:
 ```
 
 - Retriable vs terminal errors clearly labeled; retries are backoff-capped.
+
+### 9.3 Export-Specific Errors (normative)
+
+`modelops bundles export` fails with ValidationError (2) when any invariant in §21.2 is violated, including:
+• **Non-POSIX/unsafe paths** (absolute, `..`, or backslashes).
+• **Symlinks encountered** in the input tree (unsupported).
+• **Paths exceeding USTAR limits** (255 UTF-8 bytes combined; name/prefix limits apply).
+• **Disallowed file types** (block/char/fifo/sockets).
+• **Non-deterministic metadata** (extended attributes, ACLs) present and not ignored.
+
+Error messages MUST name at least the first 5 offending paths and the violated rule.
 
 ---
 
@@ -1174,6 +1289,12 @@ external_storage:
 - **Layering & Manifest Build**: Deterministic layer_id generation, manifest validation
 - **Safety**: Path traversal prevention, checksum verification, deterministic output
 
+**Operations Facade (§4.11)**
+- **Unit test Operations methods** with fakes (no CLI/Typer involved)
+- **Error mapping**: Test `map_errors_to_exit_code()` centralized policy
+- **Command orchestration**: Each Operations method with mock runtime/providers
+- **CLI smoke tests**: Patch Operations facade, test exit codes and basic output
+
 **Runtime API**  
 - **Resolve**: All resolution methods (name:tag, digest, local), correct manifest_digest/role returns
 - **Materialize**: Role-based layer selection, external ref pointer creation, idempotency
@@ -1202,6 +1323,18 @@ external_storage:
 - K8s integration tests
 
 **Rationale**: MVP tests focus on correctness, safety, and the core user journey (Push → Resolve → Materialize) while ensuring automation-friendly JSON output. This provides a working, safe system that can be extended with comprehensive testing post-MVP.
+
+### 15.4 Deterministic Export Tests (must-have)
+
+• **Byte identity**: Export the same tree twice → identical SHA-256 of archive bytes. **Test via Operations facade** for clean unit testing.
+• **Header invariants**: Parse entries; assert `mtime=0`, `uid=gid=0`, `uname=gname=""`, file `0644`, dir `0755`, directories precede children.
+• **Ordering**: Verify strict UTF-8 lexicographic order.
+• **Path normalization**: Backslashes in input become `/` in archive; NFC normalization verifies equality against expected.
+• **Negative cases (expect ValidationError (2))**:
+  • Symlink present.
+  • Absolute path or `..`.
+  • USTAR overflow (long path).
+  • Disallowed file types.
 
 ---
 
@@ -1542,6 +1675,13 @@ Exit code: 11
 - Ensure Python JSON dumps call: `json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False)`
 - Unit test: same inputs from different OS/filesystems yield identical `manifest_digest`
 
+### 20.4 Export Determinism Inputs (normative)
+
+Deterministic export (§21) treats the materialized directory as the sole source of truth. It MUST NOT:
+• **Re-read registries/object stores/providers**.
+• **Modify line endings or transcode bytes**.
+• **Synthesize or omit files** beyond canonical directory entries.
+
 ---
 
 ## 21) Deterministic Export/Import
@@ -1559,52 +1699,71 @@ Exit code: 11
 - Also include external data bytes at their final relative paths
 - Keep pointer files; update them to `"fulfilled": true` with `"local_path": "./<relpath>"`
 
-### 21.2 Deterministic Ordering & Metadata
+### 21.2 Canonicalization & Tar Invariants (normative)
 
-**Ordering:** Write entries in strict lexicographic order of POSIX normalized relative paths (UTF-8). Directories appear before their contained files.
+• **Format**: POSIX USTAR (no PAX headers). If a path cannot fit USTAR limits, fail with ValidationError (2) and print the offending path.
+• **Path rules**:
+  • POSIX relative paths only; no absolute paths, no `..`, no backslashes.
+  • Normalize to NFC Unicode; use forward slashes.
+• **Ordering**:
+  • Emit explicit parent directories.
+  • Directories before their children.
+  • Strict UTF-8 bytewise lexicographic sort across all entries.
+• **Headers (all entries)**:
+  • `mtime=0`, `uid=0`, `gid=0`, `uname=""`, `gname=""`
+• **Modes**:
+  • Directories `0755`
+  • Regular files `0644` (runtime already normalizes executable intent; export does not infer).
+• **Types allowed**: regular files and directories only.
+  • Symlinks: reject (ValidationError 2).
+  • Special files (fifo/blk/chr/socket): reject.
+• **Extended metadata**:
+  • Do not write xattrs, ACLs, SELinux, or platform forks; USTAR does not carry them.
+• **Bytes**:
+  • Archive the file bytes as-is (no EOL translation).
+• **Compression**:
+  • If compression is used (e.g., `.tar.zst`), the compressor/version/level MUST be pinned in implementation to keep byte identity. (Zstd level and library version MUST be fixed in CI/build to prevent drift.)
+  • Determinism claim is at the final artifact bytes (i.e., deterministic `.tar` or deterministic `.tar.zst`, depending on the chosen output).
 
-**Tar header normalization:**
-- `uid=0, gid=0, uname="", gname=""`
-- `mtime=0` for all entries
-- Directory mode 0755; file mode from manifest (normalized)
-- Use ustar format (POSIX tar) without PAX headers
-
-**Path normalization:**
-- Forward slashes only; no `.` or `..` segments; NFC normalization
-
-**Compression:** zstd at a fixed level (e.g., level=19) to balance size/speed deterministically. Use zstd standard library at fixed level; no custom dictionary in MVP. zstd version must be pinned to ensure byte-identical output across systems.
-
-**Chunking/streaming:** Stream in sorted order; do not parallelize writes (parallel chunk order breaks determinism).
-
-### 21.3 Pseudocode
+### 21.3 Reference Algorithm (normative pseudocode)
 
 ```python
-files = discover_files_for_export(include_external=flag)
-norm = [normalize(p) for p in files]  # relpath, NFC, forward slashes
-entries = sort(norm)                  # directories first, then files
+def write_deterministic_tar(src_dir: Path, out_tar: BinaryIO):
+    entries = collect_all_dirs_and_files(src_dir)
+    # normalize & validate
+    canon = [
+        normalize_entry(e)  # NFC, forward slashes, relative, type check
+        for e in entries
+    ]
+    validate_ustar_fits(canon)       # name/prefix limits
+    canon_sorted = sort_utf8_dirs_first(canon)
 
-with tarfile.open(mode="w|", fileobj=tar_stream, format=USTAR) as tar:
-    for e in entries:
-        ti = tarfile.TarInfo(e.relpath)
-        ti.uid = 0; ti.gid = 0; ti.uname = ""; ti.gname = ""
-        ti.mtime = 0
-        if e.is_dir:
-            ti.mode = 0o755
-            ti.type = tarfile.DIRTYPE
-            tar.addfile(ti)
-        else:
-            ti.mode = e.mode
-            ti.size = e.size
-            with open(e.abs, "rb") as f:
-                tar.addfile(ti, fileobj=f)
-# then pipe to zstd with a fixed level
+    with tarfile.open(fileobj=out_tar, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        for e in canon_sorted:
+            ti = tarfile.TarInfo(e.relpath)
+            ti.uid = 0; ti.gid = 0; ti.uname = ""; ti.gname = ""
+            ti.mtime = 0
+            if e.is_dir:
+                ti.type = tarfile.DIRTYPE; ti.mode = 0o755
+                tar.addfile(ti)
+            else:
+                ti.type = tarfile.REGTYPE; ti.mode = 0o644; ti.size = e.size
+                with open(e.abs, "rb") as f:
+                    tar.addfile(ti, fileobj=f)
 ```
 
-### 21.4 Import Rules
+### 21.4 Import Validation (normative)
 
-- Validate archive ordering and header invariants; warn (not fail) if non-canonical but recoverable
-- Verify each file's checksum against the bundle manifest (for ORAS files) or pointer sha256 (for external)
-- On mismatch: fail with `ValidationError` (exit 2) listing offending paths
+Import MUST:
+• **Read the archive** and verify ordering and header invariants (warn if recoverable; fail if canonicality is violated materially).
+• **Verify ORAS file bytes** against the bundle manifest; verify external pointer checksums match the pointer JSON (sha256) for included bytes when `--include-external` is used.
+• **Fail with ValidationError (2)** on any mismatch; list up to 20 offending entries.
+
+### 21.5 Cross-Platform Notes (informative)
+
+• **Case sensitivity**: determinism assumes the on-disk tree is already stable; scanning/materialization (§20.1) prevents path collisions.
+• **Time, locale, TZ** have no effect (`mtime=0`).
+• **Filesystem permissions** beyond the normalized modes do not influence output.
 
 ---
 

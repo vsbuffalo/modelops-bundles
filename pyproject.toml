@@ -11,6 +11,7 @@ dependencies = [
     "rich>=14.1.0",
     "testcontainers[registry]>=4.12.0",
     "typer>=0.16.1",
+    "zstandard>=0.23.0",
 ]
 
 [build-system]
@@ -25,6 +26,9 @@ dev = [
 
 [tool.uv.sources]
 modelops-contracts = { path = "../modelops-contracts", editable = true }
+
+[project.scripts]
+modelops-bundles = "modelops_bundles.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
