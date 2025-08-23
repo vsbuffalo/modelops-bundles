@@ -21,7 +21,7 @@ from modelops_contracts.artifacts import BundleRef
 from .operations import Operations, OpsConfig, run_and_exit
 from .operations.printers import (
     print_resolved_bundle, print_materialize_summary, print_export_summary,
-    print_stub_message
+    print_push_summary, print_stub_message
 )
 from .runtime_types import ContentProvider
 from .providers.bundle_content import default_provider_from_env
@@ -34,10 +34,11 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
     
     Supports formats:
     - "name:version" -> BundleRef(name, version)  
-    - "sha256:digest" -> BundleRef(digest)
-    - "@sha256:digest" -> BundleRef(digest) [OCI format]
+    - "name@sha256:digest" -> BundleRef(name, digest)
     - "/local/path" -> BundleRef(local_path)
     - r"C:\\local\\path" -> BundleRef(local_path) [Windows]
+    
+    Note: Bare digests ("sha256:digest" or "@sha256:digest") are NOT supported.
     
     Args:
         ref_str: Bundle reference string
@@ -49,23 +50,28 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
         ValueError: If ref_str format is invalid
     """
     ref_str = ref_str.strip()
-    if ref_str.startswith("sha256:"):
-        # Normalize digest to lowercase for registry compatibility
-        normalized_digest = ref_str.lower()
-        return BundleRef(digest=normalized_digest)
-    elif ref_str.startswith("@sha256:"):
-        # OCI digest format - strip the @ prefix and normalize to lowercase
-        normalized_digest = ref_str[1:].lower()
-        return BundleRef(digest=normalized_digest)
-    elif ref_str.startswith("/") or ref_str.startswith("./") or ref_str.startswith("../") or ref_str.startswith(".\\") or ref_str.startswith("..\\") or os.path.isabs(ref_str):
+    
+    # Support name@sha256:digest format  
+    if "@" in ref_str and "sha256:" in ref_str.split("@", 1)[1]:
+        name, digest = ref_str.split("@", 1)
+        if not name:  # Empty name before @ - this is a bare digest
+            raise ValueError("Bare digests not supported. Use name@sha256:<digest>")
+        return BundleRef(name=name, digest=digest.lower())
+    
+    # Reject bare digests
+    elif ref_str.startswith("sha256:") or ref_str.startswith("@sha256:"):
+        raise ValueError("Bare digests not supported. Use name@sha256:<digest>")
+    
+    # Local paths - Windows paths need special handling due to colon
+    elif os.path.isabs(ref_str):
         return BundleRef(local_path=ref_str)
+    elif ref_str.startswith("./") or ref_str.startswith("../") or ref_str.startswith(".\\") or ref_str.startswith("..\\"):
+        return BundleRef(local_path=ref_str)
+    
+    # name:version format
     elif ":" in ref_str:
-        parts = ref_str.split(":", 1)  # Split only on first ':'
-        if len(parts) == 2:
-            # Reject names containing "/" to avoid namespace confusion
-            if "/" in parts[0]:
-                raise ValueError("Bundle names cannot contain '/'. Use digest format for full registry paths")
-            return BundleRef(name=parts[0], version=parts[1])
+        name, version = ref_str.split(":", 1)
+        return BundleRef(name=name, version=version)
     
     raise ValueError(f"Invalid bundle reference format: {ref_str}")
 
@@ -98,113 +104,122 @@ def _create_provider(provider_name: Optional[str] = None) -> Optional[ContentPro
     # Use real provider for production
     return default_provider_from_env()
 
-def _create_registry_store(provider_name: Optional[str] = None):
+def _create_fake_registry():
     """
-    Create BundleRegistryStore for resolve operations.
+    Create FakeOciRegistry for testing.
     
-    Args:
-        provider_name: Provider type override for testing
-        
     Returns:
-        BundleRegistryStore instance for registry access
+        FakeOciRegistry instance with seeded test data, or None if unavailable
     """
-    if provider_name == "fake":
-        # Import here to avoid dependency on test code
-        try:
-            from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
-            fake_store = FakeBundleRegistryStore()
-            # Add some fake manifests for testing
-            _add_fake_manifests(fake_store)
-            return fake_store
-        except ImportError as e1:
-            # Try alternate path for tests run outside pytest  
-            try:
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.getcwd(), 'tests'))
-                from storage.fakes.fake_oras import FakeBundleRegistryStore
-                fake_store = FakeBundleRegistryStore()
-                _add_fake_manifests(fake_store)
-                return fake_store
-            except ImportError:
-                typer.echo("Warning: FakeBundleRegistryStore not available, using real store")
-    
-    # Use real ORAS adapter for production
-    from .settings import load_settings_from_env
-    from .storage.oras import OrasAdapter
-    settings = load_settings_from_env()
-    return OrasAdapter(settings=settings)
+    try:
+        from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+        fake_registry = FakeOciRegistry()
+        # Add some fake manifests for testing
+        _add_fake_manifests_oci(fake_registry)
+        return fake_registry
+    except ImportError:
+        typer.echo("Warning: FakeOciRegistry not available")
+        return None
 
-def _add_fake_manifests(fake_store):
-    """Add fake manifests to FakeBundleRegistryStore for testing."""
+def _add_fake_manifests_oci(fake_registry):
+    """Add fake manifests to FakeOciRegistry for testing."""
     import json
     import hashlib
     
-    # First, create fake layer indexes with known digests
-    layer_index_digests = {}
+    # Import OCI helper
+    try:
+        from tests.helpers.oci_helpers import setup_fake_bundle_in_registry, create_oci_image_manifest
+    except ImportError:
+        # Fallback if helpers not available
+        typer.echo("Warning: OCI helpers not available for fake registry setup")
+        return
     
-    for layer in ["code", "config", "data"]:
+    repo = "testns/bundles/bundle"
+    
+    # Create layer indexes and blobs
+    layer_blobs = {}
+    layer_indexes = {}
+    
+    # Create ORAS content for code and config layers
+    for layer in ["code", "config"]:
+        layer_entries = []
+        for i in range(2):  # Fewer files for simplicity
+            fake_content = f"fake-{layer}-content-{i}".encode()
+            content_digest = f"sha256:{hashlib.sha256(fake_content).hexdigest()}"
+            layer_blobs[content_digest] = fake_content
+            
+            layer_entries.append({
+                "path": f"{layer}/file{i}.txt",
+                "digest": content_digest
+            })
+        
+        # Create layer index
         layer_index = {
             "mediaType": "application/vnd.modelops.layer+json",
-            "entries": []
+            "entries": layer_entries
         }
-        
-        if layer == "data":
-            # Data layer has external entries
-            layer_index["entries"] = [
-                {
-                    "path": "data/train.csv",
-                    "external": {
-                        "uri": "az://fake-container/train.csv",
-                        "sha256": "fake-train-sha256",
-                        "size": 1048576
-                    }
-                },
-                {
-                    "path": "data/test.csv", 
-                    "external": {
-                        "uri": "az://fake-container/test.csv",
-                        "sha256": "fake-test-sha256",
-                        "size": 512000
-                    }
-                }
-            ]
-        else:
-            # Code/config layers have ORAS entries
-            layer_index["entries"] = [
-                {
-                    "path": f"{layer}/example.txt",
-                    "oras": {
-                        "digest": f"sha256:fake-{layer}-blob-digest"
-                    }
-                }
-            ]
-        
-        # Store layer index and get its computed digest
-        layer_payload = json.dumps(layer_index).encode()
-        digest = fake_store.put_manifest("application/vnd.modelops.layer+json", layer_payload)
-        layer_index_digests[layer] = digest
+        layer_payload = json.dumps(layer_index, sort_keys=True, separators=(',', ':')).encode()
+        layer_digest = f"sha256:{hashlib.sha256(layer_payload).hexdigest()}"
+        layer_blobs[layer_digest] = layer_payload
+        layer_indexes[layer] = layer_digest
     
-    # Now create bundle manifest with actual layer index digests
+    # Create data layer with external entries
+    data_layer_index = {
+        "mediaType": "application/vnd.modelops.layer+json",
+        "entries": [
+            {
+                "path": "data/train.csv",
+                "external": {
+                    "uri": "az://fake-container/train.csv",
+                    "sha256": "1234567890abcdef" * 8,  # 64 chars
+                    "size": 1024,
+                    "tier": "hot"
+                }
+            },
+            {
+                "path": "data/test.csv", 
+                "external": {
+                    "uri": "az://fake-container/test.csv",
+                    "sha256": "abcdef1234567890" * 8,  # 64 chars
+                    "size": 512,
+                    "tier": "cool"
+                }
+            }
+        ]
+    }
+    data_payload = json.dumps(data_layer_index, sort_keys=True, separators=(',', ':')).encode()
+    data_digest = f"sha256:{hashlib.sha256(data_payload).hexdigest()}"
+    layer_blobs[data_digest] = data_payload
+    layer_indexes["data"] = data_digest
+    
+    # Create bundle manifest for "bundle" name (used by CLI tests)
     bundle_manifest = {
         "mediaType": "application/vnd.modelops.bundle.manifest+json",
+        "name": "bundle",
+        "version": "1.0.0",
         "roles": {
             "default": ["code", "config"],
-            "runtime": ["code", "config"],
+            "runtime": ["code"],
             "training": ["code", "config", "data"]
         },
-        "layers": ["code", "config", "data"],
-        "layer_indexes": layer_index_digests,
+        "layers": list(layer_indexes.keys()),  # List of layer names
+        "layer_indexes": layer_indexes,
         "external_index_present": True
     }
     
-    # Store bundle manifest
-    bundle_payload = json.dumps(bundle_manifest).encode()
-    bundle_digest = fake_store.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
+    # Set up bundle using helper
+    setup_fake_bundle_in_registry(
+        fake_registry, 
+        repo, 
+        bundle_manifest, 
+        "v1.0.0",
+        layer_blobs
+    )
     
-    # Tag manifest with references for testing using public API
-    fake_store.tag_manifest("test/repo/myrepo:1.2.3", bundle_digest)
-    fake_store.tag_manifest("test/repo/bundle:v1.0.0", bundle_digest)  # For CLI smoke tests
+    # Also tag with "1.0.0" for compatibility
+    bundle_manifest_bytes = json.dumps(bundle_manifest, sort_keys=True, separators=(',', ':')).encode()
+    oci_manifest_bytes = create_oci_image_manifest(bundle_manifest_bytes)
+    fake_registry.put_manifest(repo, "application/vnd.oci.image.manifest.v1+json", oci_manifest_bytes, "1.0.0")
 
 @app.command()
 def resolve(
@@ -219,22 +234,29 @@ def resolve(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, verbose=verbose)
         
-        # Create registry and repository based on provider type
+        # Create registry and settings based on provider type
         if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, registry=registry, repository="test/repo")
-        else:
-            # Production path - create registry and pass to Operations
-            from .settings import load_settings_from_env
-            from .storage.oras import OrasAdapter
-            
-            settings = load_settings_from_env()
-            registry = OrasAdapter(settings=settings)
-            ops = Operations(
-                config=config,
-                registry=registry,
-                repository=settings.registry_repo
+            registry = _create_fake_registry()
+            # Use fake settings for testing
+            from .settings import Settings
+            settings = Settings(
+                registry_url="http://fake-registry:5000",
+                registry_repo="testns"
             )
+            if registry is None:
+                # Fallback to real registry
+                from .settings import load_settings_from_env
+                from .storage.registry_factory import make_registry
+                settings = load_settings_from_env()
+                registry = make_registry(settings)
+        else:
+            # Production path - create registry using factory
+            from .settings import load_settings_from_env
+            from .storage.registry_factory import make_registry
+            settings = load_settings_from_env()
+            registry = make_registry(settings)
+        
+        ops = Operations(config=config, registry=registry, settings=settings)
         
         resolved = ops.resolve(ref)
         print_resolved_bundle(resolved, verbose=verbose)
@@ -258,29 +280,47 @@ def materialize(
     def _materialize() -> None:
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
-        content_provider = _create_provider(provider)
         
-        # Create registry and repository based on provider type
+        # Load settings for all paths
+        from .settings import load_settings_from_env
+        settings = load_settings_from_env()
+        
+        # Create registry and provider based on provider type
         if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            # Production path - create full provider stack
-            from .settings import load_settings_from_env
-            from .storage.oras import OrasAdapter
-            from .storage.object_store import AzureExternalAdapter
-            from .providers.bundle_content import BundleContentProvider
+            registry = _create_fake_registry()
+            if registry is None:
+                # Fallback to real registry
+                from .storage.registry_factory import make_registry
+                registry = make_registry(settings)
             
-            settings = load_settings_from_env()
-            registry = OrasAdapter(settings=settings)
+            # Use fake external store too
+            try:
+                from tests.storage.fakes.fake_external import FakeExternalStore
+                external = FakeExternalStore()
+            except ImportError:
+                from .storage.object_store import AzureExternalAdapter
+                external = AzureExternalAdapter(settings=settings)
+        else:
+            # Production path - create real adapters
+            from .storage.registry_factory import make_registry
+            from .storage.object_store import AzureExternalAdapter
+            
+            registry = make_registry(settings)
             external = AzureExternalAdapter(settings=settings)
-            content_provider = BundleContentProvider(registry=registry, external=external)
-            ops = Operations(
-                config=config,
-                provider=content_provider,
-                registry=registry,
-                repository=settings.registry_repo
-            )
+        
+        # Always pass settings to provider
+        from .providers.bundle_content import BundleContentProvider
+        content_provider = BundleContentProvider(
+            registry=registry, 
+            external=external,
+            settings=settings
+        )
+        
+        ops = Operations(
+            config=config,
+            provider=content_provider,
+            registry=registry
+        )
         
         result = ops.materialize(
             ref=ref,
@@ -311,29 +351,47 @@ def pull(
     def _pull() -> None:
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
-        content_provider = _create_provider(provider)
         
-        # Create registry and repository based on provider type
+        # Load settings for all paths
+        from .settings import load_settings_from_env
+        settings = load_settings_from_env()
+        
+        # Create registry and provider based on provider type
         if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            # Production path - create full provider stack
-            from .settings import load_settings_from_env
-            from .storage.oras import OrasAdapter
-            from .storage.object_store import AzureExternalAdapter
-            from .providers.bundle_content import BundleContentProvider
+            registry = _create_fake_registry()
+            if registry is None:
+                # Fallback to real registry
+                from .storage.registry_factory import make_registry
+                registry = make_registry(settings)
             
-            settings = load_settings_from_env()
-            registry = OrasAdapter(settings=settings)
+            # Use fake external store too
+            try:
+                from tests.storage.fakes.fake_external import FakeExternalStore
+                external = FakeExternalStore()
+            except ImportError:
+                from .storage.object_store import AzureExternalAdapter
+                external = AzureExternalAdapter(settings=settings)
+        else:
+            # Production path - create real adapters
+            from .storage.registry_factory import make_registry
+            from .storage.object_store import AzureExternalAdapter
+            
+            registry = make_registry(settings)
             external = AzureExternalAdapter(settings=settings)
-            content_provider = BundleContentProvider(registry=registry, external=external)
-            ops = Operations(
-                config=config,
-                provider=content_provider,
-                registry=registry,
-                repository=settings.registry_repo
-            )
+        
+        # Always pass settings to provider
+        from .providers.bundle_content import BundleContentProvider
+        content_provider = BundleContentProvider(
+            registry=registry, 
+            external=external,
+            settings=settings
+        )
+        
+        ops = Operations(
+            config=config,
+            provider=content_provider,
+            registry=registry
+        )
         
         result = ops.pull(
             ref=ref,
@@ -403,8 +461,20 @@ def scan(
     def _scan() -> None:
         config = OpsConfig()
         # Provide minimal registry for stub operations 
-        registry = _create_registry_store("fake")
-        ops = Operations(config=config, registry=registry, repository="stub/repo")
+        registry = _create_fake_registry()
+        if registry is None:
+            from .settings import load_settings_from_env
+            from .storage.registry_factory import make_registry
+            settings = load_settings_from_env()
+            registry = make_registry(settings)
+        else:
+            # Use fake settings for testing
+            from .settings import Settings
+            settings = Settings(
+                registry_url="http://fake-registry:5000",
+                registry_repo="testns"
+            )
+        ops = Operations(config=config, registry=registry, settings=settings)
         
         result = ops.scan(working_dir)
         print_stub_message("scan")
@@ -422,8 +492,13 @@ def plan(
     def _plan() -> None:
         config = OpsConfig()
         # Provide minimal registry for stub operations
-        registry = _create_registry_store("fake") 
-        ops = Operations(config=config, registry=registry, repository="stub/repo")
+        registry = _create_fake_registry()
+        if registry is None:
+            from .settings import load_settings_from_env
+            from .storage.registry_factory import make_registry
+            settings = load_settings_from_env()
+            registry = make_registry(settings)
+        ops = Operations(config=config, registry=registry)
         
         result = ops.plan(working_dir, external_preview=external_preview)
         print_stub_message("plan")
@@ -440,8 +515,13 @@ def diff(
     def _diff() -> None:
         config = OpsConfig()
         # Provide minimal registry for stub operations
-        registry = _create_registry_store("fake")
-        ops = Operations(config=config, registry=registry, repository="stub/repo")
+        registry = _create_fake_registry()
+        if registry is None:
+            from .settings import load_settings_from_env
+            from .storage.registry_factory import make_registry
+            settings = load_settings_from_env()
+            registry = make_registry(settings)
+        ops = Operations(config=config, registry=registry)
         
         result = ops.diff(ref_or_path)
         print_stub_message("diff")
@@ -452,19 +532,30 @@ def diff(
 @app.command()
 def push(
     working_dir: str = typer.Argument(".", help="Directory containing bundle"),
-    bump: Optional[str] = typer.Option(None, "--bump", help="Version bump strategy (patch, minor, major)")
+    bump: Optional[str] = typer.Option(None, "--bump", help="Version bump strategy (patch, minor, major)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be pushed without actually pushing"),
+    force: bool = typer.Option(False, "--force", help="Skip change detection and always push")
 ) -> None:
     """Push bundle to registry."""
     
     def _push() -> None:
         config = OpsConfig()
-        # Provide minimal registry for stub operations
-        registry = _create_registry_store("fake")
-        ops = Operations(config=config, registry=registry, repository="stub/repo")
         
-        result = ops.push(working_dir, bump=bump)
-        print_stub_message("push")
-        typer.echo(result)
+        # Create registry from settings
+        from .settings import load_settings_from_env
+        from .storage.registry_factory import make_registry
+        
+        settings = load_settings_from_env()
+        registry = make_registry(settings)
+        ops = Operations(
+            config=config,
+            registry=registry,
+            settings=settings
+        )
+        
+        # Push bundle - this now returns a digest
+        digest = ops.push(working_dir, bump=bump, dry_run=dry_run, force=force)
+        print_push_summary(digest, working_dir, bump)
     
     run_and_exit(_push)
 

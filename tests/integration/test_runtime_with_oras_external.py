@@ -14,7 +14,8 @@ import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+from modelops_bundles.settings import Settings
 from tests.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime import materialize, resolve, WorkdirConflict
 
@@ -47,30 +48,32 @@ class TestRuntimeWithOrasExternal:
     
     def test_materialize_with_real_provider_oras_and_external(self, tmp_path):
         """Test full materialize workflow with ORAS files and external pointers."""
-        oras = FakeBundleRegistryStore()
+        oras = FakeOciRegistry()
         external = FakeExternalStore()
-        provider = BundleContentProvider(registry=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
         # Seed ORAS blobs + indexes
         code_py = b"# Python model code\nprint('hello world')\n"
         cfg_yaml = b"model:\n  type: test\n  version: 1.0\n"
         d_code = "sha256:" + hashlib.sha256(code_py).hexdigest()
         d_cfg = "sha256:" + hashlib.sha256(cfg_yaml).hexdigest()
-        oras.put_blob(d_code, code_py)
-        oras.put_blob(d_cfg, cfg_yaml)
+        repo = "testns/bundles/stage3"
+        oras.put_blob(repo, d_code, code_py)
+        oras.put_blob(repo, d_cfg, cfg_yaml)
 
-        # Create layer indexes
-        code_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
-            {"path": "src/model.py", "digest": d_code, "layer": "code"},
-        ]))
-        config_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
-            {"path": "configs/base.yaml", "digest": d_cfg, "layer": "config"},
-        ]))
+        # Create layer indexes as blobs (not manifests)
+        code_idx_data = _layer_index_doc([{"path": "src/model.py", "digest": d_code, "layer": "code"}])
+        code_idx = f"sha256:{hashlib.sha256(code_idx_data).hexdigest()}"
+        oras.put_blob(repo, code_idx, code_idx_data)
+        
+        config_idx_data = _layer_index_doc([{"path": "configs/base.yaml", "digest": d_cfg, "layer": "config"}])
+        config_idx = f"sha256:{hashlib.sha256(config_idx_data).hexdigest()}"
+        oras.put_blob(repo, config_idx, config_idx_data)
 
         # External data files
         train_sha = hashlib.sha256(b"train-data-bytes").hexdigest()
         test_sha = hashlib.sha256(b"test-data-bytes").hexdigest()
-        data_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        data_idx_data = _layer_index_doc([
             {
                 "path": "data/train.csv", 
                 "external": {
@@ -90,7 +93,9 @@ class TestRuntimeWithOrasExternal:
                 }, 
                 "layer": "data"
             },
-        ]))
+        ])
+        data_idx = f"sha256:{hashlib.sha256(data_idx_data).hexdigest()}"
+        oras.put_blob(repo, data_idx, data_idx_data)
 
         resolved = _mk_resolved(
             roles={"runtime": ["code", "config"], "training": ["code", "config", "data"]},
@@ -101,7 +106,7 @@ class TestRuntimeWithOrasExternal:
         # Mock resolve to return our resolved bundle
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True: resolved
         
         try:
             # Materialize training role (includes data -> creates pointers)
@@ -112,8 +117,7 @@ class TestRuntimeWithOrasExternal:
                 role="training", 
                 provider=provider, 
                 prefetch_external=False,
-                registry=oras,
-                repository="test/repo"
+                registry=oras
             )
 
             # Check that resolve result is returned in MaterializeResult
@@ -150,18 +154,21 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_runtime_role_excludes_data(self, tmp_path):
         """Test that runtime role only gets code + config, no data pointers."""
-        oras = FakeBundleRegistryStore()
+        oras = FakeOciRegistry()
         external = FakeExternalStore()
-        provider = BundleContentProvider(registry=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
         # Simple setup with just code layer
         code_py = b"# runtime code only\n"
         d_code = "sha256:" + hashlib.sha256(code_py).hexdigest()
-        oras.put_blob(d_code, code_py)
+        repo = "testns/bundles/test-bundle"
+        oras.put_blob(repo, d_code, code_py)
 
-        code_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        code_idx_data = _layer_index_doc([
             {"path": "src/main.py", "digest": d_code, "layer": "code"},
-        ]))
+        ])
+        code_idx = f"sha256:{hashlib.sha256(code_idx_data).hexdigest()}"
+        oras.put_blob(repo, code_idx, code_idx_data)
 
         resolved = _mk_resolved(
             roles={"runtime": ["code"], "training": ["code", "data"]},
@@ -171,7 +178,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True: resolved
         
         try:
             dest = str(tmp_path / "runtime_workspace")
@@ -180,8 +187,7 @@ class TestRuntimeWithOrasExternal:
                 dest, 
                 role="runtime", 
                 provider=provider,
-                registry=oras,
-                repository="test/repo"
+                registry=oras
             )
 
             # Should have code file
@@ -198,18 +204,19 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_prefetch_external_with_conflicts(self, tmp_path):
         """Test prefetch_external=True with conflict detection."""
-        oras = FakeBundleRegistryStore()
+        oras = FakeOciRegistry()
         external = FakeExternalStore()
-        provider = BundleContentProvider(registry=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
         # External file that can be fetched
         external_content = b"actual-external-data"
         external_uri = "az://container/file.bin"
         external_sha = hashlib.sha256(external_content).hexdigest()
         external.put(external_uri, external_content)
+        repo = "testns/bundles/test-bundle"
 
         # Index with single external file
-        data_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        data_idx_data = _layer_index_doc([
             {
                 "path": "data/file.bin", 
                 "external": {
@@ -219,7 +226,9 @@ class TestRuntimeWithOrasExternal:
                 }, 
                 "layer": "data"
             }
-        ]))
+        ])
+        data_idx = f"sha256:{hashlib.sha256(data_idx_data).hexdigest()}"
+        oras.put_blob(repo, data_idx, data_idx_data)
 
         resolved = _mk_resolved(
             roles={"runtime": ["data"]},
@@ -235,7 +244,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True: resolved
         
         try:
             # Without overwrite -> should raise WorkdirConflict
@@ -248,8 +257,7 @@ class TestRuntimeWithOrasExternal:
                     prefetch_external=True, 
                     overwrite=False,
                     registry=oras,
-                    repository="test/repo"
-                )
+                                    )
 
             # With overwrite -> should replace file and set pointer fulfilled
             result = materialize(
@@ -259,8 +267,7 @@ class TestRuntimeWithOrasExternal:
                 provider=provider, 
                 prefetch_external=True, 
                 overwrite=True,
-                registry=oras,
-                repository="test/repo"
+                registry=oras
             )
 
             # Check file was replaced
@@ -279,21 +286,24 @@ class TestRuntimeWithOrasExternal:
 
     def test_deterministic_materialization(self, tmp_path):
         """Test that repeated materialization is deterministic and idempotent."""
-        oras = FakeBundleRegistryStore()
+        oras = FakeOciRegistry()
         external = FakeExternalStore() 
-        provider = BundleContentProvider(registry=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
         # Simple mixed content
         code_content = b"# deterministic test\nprint('consistent')\n"
         code_digest = "sha256:" + hashlib.sha256(code_content).hexdigest()
-        oras.put_blob(code_digest, code_content)
+        repo = "testns/bundles/test-bundle"
+        oras.put_blob(repo, code_digest, code_content)
 
-        code_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        code_idx_data = _layer_index_doc([
             {"path": "src/app.py", "digest": code_digest, "layer": "code"},
-        ]))
+        ])
+        code_idx = f"sha256:{hashlib.sha256(code_idx_data).hexdigest()}"
+        oras.put_blob(repo, code_idx, code_idx_data)
 
         ext_sha = hashlib.sha256(b"external-deterministic").hexdigest()
-        data_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        data_idx_data = _layer_index_doc([
             {
                 "path": "data/sample.csv",
                 "external": {
@@ -303,7 +313,9 @@ class TestRuntimeWithOrasExternal:
                 },
                 "layer": "data"
             }
-        ]))
+        ])
+        data_idx = f"sha256:{hashlib.sha256(data_idx_data).hexdigest()}"
+        oras.put_blob(repo, data_idx, data_idx_data)
 
         resolved = _mk_resolved(
             roles={"test": ["code", "data"]},
@@ -313,7 +325,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True: resolved
 
         try:
             dest = str(tmp_path / "deterministic_test")
@@ -324,8 +336,7 @@ class TestRuntimeWithOrasExternal:
                 dest,
                 role="test", 
                 provider=provider,
-                registry=oras,
-                repository="test/repo"
+                registry=oras
             )
             
             # Read results after first run
@@ -341,8 +352,7 @@ class TestRuntimeWithOrasExternal:
                 dest,
                 role="test",
                 provider=provider,
-                registry=oras,
-                repository="test/repo"
+                registry=oras
             )
             
             # Results should be identical  
@@ -367,18 +377,21 @@ class TestRuntimeWithOrasExternal:
 
     def test_reserved_prefix_via_provider_rejected(self, tmp_path):
         """Test that .mops/ path from provider gets rejected by runtime."""
-        oras = FakeBundleRegistryStore()
+        oras = FakeOciRegistry()
         external = FakeExternalStore()
-        provider = BundleContentProvider(registry=oras, external=external)
+        provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
         # Create malicious index with .mops/ path
         evil_content = b"should not be written to reserved location"
         evil_digest = "sha256:" + hashlib.sha256(evil_content).hexdigest()
-        oras.put_blob(evil_digest, evil_content)
+        repo = "testns/bundles/test-bundle"
+        oras.put_blob(repo, evil_digest, evil_content)
 
-        evil_idx = oras.put_manifest(LAYER_INDEX, _layer_index_doc([
+        evil_idx_data = _layer_index_doc([
             {"path": ".mops/evil.txt", "digest": evil_digest, "layer": "code"},
-        ]))
+        ])
+        evil_idx = f"sha256:{hashlib.sha256(evil_idx_data).hexdigest()}"
+        oras.put_blob(repo, evil_idx, evil_idx_data)
 
         resolved = _mk_resolved(
             roles={"runtime": ["code"]},
@@ -388,7 +401,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry, repository=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True: resolved
         
         try:
             dest = str(tmp_path / "evil_workspace")
@@ -401,8 +414,7 @@ class TestRuntimeWithOrasExternal:
                     role="runtime", 
                     provider=provider,
                     registry=oras,
-                    repository="test/repo"
-                )
+                                    )
 
             # Verify no files were created at all
             dest_path = Path(dest)
@@ -416,7 +428,7 @@ class TestRuntimeWithOrasExternal:
 
 def test_resolve_digest_only_reference():
     """Test resolve with digest-only reference."""
-    oras = FakeBundleRegistryStore()
+    oras = FakeOciRegistry()
     external = FakeExternalStore()
     
     # Create a layer index with external entries
@@ -432,7 +444,7 @@ def test_resolve_digest_only_reference():
     ])
     
     # Store the layer index
-    data_index_digest = oras.put_manifest("application/vnd.modelops.layer+json", data_index)
+    data_index_digest = oras.put_manifest("testns/bundles/test-bundle", "application/vnd.modelops.layer+json", data_index, "layer")
     
     # Create bundle manifest
     bundle_manifest = {
@@ -450,15 +462,15 @@ def test_resolve_digest_only_reference():
     
     # Store bundle manifest and get its digest
     bundle_payload = json.dumps(bundle_manifest).encode()
-    bundle_digest = oras.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
+    bundle_digest = oras.put_manifest("testns/bundles/test-bundle", "application/vnd.modelops.bundle.manifest+json", bundle_payload, "1.0")
     
-    # Test resolve with digest-only reference
-    digest_ref = BundleRef(digest=bundle_digest)
-    resolved = resolve(digest_ref, registry=oras, repository="test/repo")
+    # Test resolve with name@digest reference
+    digest_ref = BundleRef(name="test-bundle", digest=bundle_digest)
+    resolved = resolve(digest_ref, registry=oras)
     
     # Verify the resolved bundle
     assert resolved.ref.digest == bundle_digest
-    assert resolved.ref.name is None
+    assert resolved.ref.name == "test-bundle"
     assert resolved.ref.version is None
     assert resolved.manifest_digest == bundle_digest
     assert resolved.roles == {"default": ["data"], "training": ["data"]}

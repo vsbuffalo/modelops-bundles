@@ -6,10 +6,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.40.14",
+    "httpx>=0.28.1",
     "modelops-contracts",
     "oras>=0.2.37",
+    "pydantic>=2.0.0",
     "pytest>=8.4.1",
+    "PyYAML>=6.0",
     "rich>=14.1.0",
+    "tenacity>=9.0.0",
     "testcontainers[registry]>=4.12.0",
     "typer>=0.16.1",
     "zstandard>=0.23.0",
@@ -22,7 +26,6 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "azure-storage-blob>=12.26.0",
-    "httpx>=0.28.1",
 ]
 
 [tool.uv.sources]

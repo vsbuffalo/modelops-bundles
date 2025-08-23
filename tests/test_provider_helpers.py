@@ -19,8 +19,8 @@ class TestDefaultProviderFromEnv:
         """Test that factory creates provider with real adapters."""
         # Mock environment with required settings
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/modelops-bundles",
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/modelops-bundles",
             "AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=key"
         }
         
@@ -54,14 +54,14 @@ class TestDefaultProviderFromEnv:
         reset_settings_cache()
         
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="MODEL_OPS_REGISTRY_URL environment variable is required"):
+            with pytest.raises(ValueError, match="MODELOPS_REGISTRY_URL environment variable is required"):
                 default_provider_from_env()
     
     def test_raises_on_missing_azure_config(self):
         """Test that factory raises when Azure config missing."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/modelops-bundles"
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/modelops-bundles"
             # No Azure config
         }
         

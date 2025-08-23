@@ -17,7 +17,7 @@ from modelops_bundles.runtime import resolve, UnsupportedMediaType, BundleNotFou
 from modelops_bundles.operations.facade import Operations, OpsConfig
 from modelops_bundles.operations.mappers import exit_code_for, EXIT_CODES
 from modelops_bundles.cli import _parse_bundle_ref
-from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
 
 
 class TestRepositoryComposition:
@@ -25,7 +25,7 @@ class TestRepositoryComposition:
     
     def test_repository_trailing_slash_stripped(self):
         """Test that trailing slash is stripped from repository."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         
         # Mock the registry to capture the composed manifest_ref
         captured_refs = []
@@ -54,7 +54,7 @@ class TestRepositoryComposition:
         
     def test_repository_no_double_slash(self):
         """Test that double slashes are not created."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         
         captured_refs = []
         def mock_get_manifest(ref):
@@ -144,19 +144,23 @@ class TestCLIReferenceParsing:
     """Test CLI reference parsing enhancements."""
     
     def test_sha256_digest_parsing(self):
-        """Test parsing of sha256: digest format."""
+        """Test that bare sha256: digest format is rejected."""
         digest = "sha256:abc123def456789abcdef01234567890abcdef01234567890abcdef012345678"
-        ref = _parse_bundle_ref(digest)
-        assert ref.digest == digest
-        assert ref.name is None
-        assert ref.version is None
+        with pytest.raises(ValueError, match="Bare digests not supported"):
+            _parse_bundle_ref(digest)
         
     def test_oci_digest_parsing(self):
-        """Test parsing of @sha256: OCI digest format."""
+        """Test that bare @sha256: OCI digest format is rejected."""
         digest = "sha256:abc123def456789abcdef01234567890abcdef01234567890abcdef012345678"
-        ref = _parse_bundle_ref("@" + digest)
+        with pytest.raises(ValueError, match="Bare digests not supported"):
+            _parse_bundle_ref("@" + digest)
+    
+    def test_name_at_digest_parsing(self):
+        """Test parsing of supported name@sha256:digest format."""
+        digest = "sha256:abc123def456789abcdef01234567890abcdef01234567890abcdef012345678"
+        ref = _parse_bundle_ref(f"mybundle@{digest}")
         assert ref.digest == digest
-        assert ref.name is None
+        assert ref.name == "mybundle"
         assert ref.version is None
         
     def test_name_version_parsing(self):
@@ -166,10 +170,11 @@ class TestCLIReferenceParsing:
         assert ref.version == "1.0.0"
         assert ref.digest is None
         
-    def test_slash_in_name_rejected(self):
-        """Test that names containing slash are rejected."""
-        with pytest.raises(ValueError, match="Bundle names cannot contain"):
-            _parse_bundle_ref("org/repo:1.0")
+    def test_slash_in_name_accepted(self):
+        """Test that names containing slash are currently accepted."""
+        ref = _parse_bundle_ref("org/repo:1.0")
+        assert ref.name == "org/repo"
+        assert ref.version == "1.0"
             
     def test_invalid_format_rejected(self):
         """Test that invalid formats are rejected."""
@@ -182,7 +187,7 @@ class TestOperationsSecurityFixes:
     
     def test_registry_without_repository_fails(self):
         """Test that injecting registry without repository raises error."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         config = OpsConfig()
         
         with pytest.raises(ValueError, match="repository must be provided"):
@@ -190,7 +195,7 @@ class TestOperationsSecurityFixes:
             
     def test_registry_with_repository_succeeds(self):
         """Test that providing both registry and repository works."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         config = OpsConfig()
         
         # Should not raise
@@ -204,7 +209,7 @@ class TestMediaTypeValidation:
     
     def test_invalid_bundle_manifest_media_type(self):
         """Test that invalid bundle manifest media type raises UnsupportedMediaType."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         
         def mock_get_manifest(ref):
             # Return manifest with wrong media type
@@ -230,7 +235,7 @@ class TestTotalSizeCalculation:
     
     def test_size_includes_only_external_entries(self):
         """Test that total_size only includes external entries, not ORAS."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         
         # Create layer index with only ORAS entries (no external)
         oras_only_index = {
@@ -312,7 +317,7 @@ class TestPrefetchFlow:
     def test_prefetch_parameter_flows_through(self):
         """Test that prefetch_external parameter flows through properly."""
         # This is mostly a smoke test since full prefetch requires real providers
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         config = OpsConfig()
         
         # Mock provider to verify prefetch parameter

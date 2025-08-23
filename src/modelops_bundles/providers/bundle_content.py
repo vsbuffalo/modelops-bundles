@@ -12,7 +12,10 @@ from typing import Iterable
 from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
 from ..runtime_types import ContentProvider, MatEntry
-from ..storage.base import ExternalStore, BundleRegistryStore
+from ..storage.base import ExternalStore  
+from ..storage.oci_registry import OciRegistry
+from ..storage.repo_path import build_repo
+from ..settings import Settings
 from ..path_safety import safe_relpath
 
 __all__ = ["BundleContentProvider", "default_provider_from_env"]
@@ -35,16 +38,18 @@ class BundleContentProvider(ContentProvider):
     Constructor accepts stores and implements iter_entries() interface.
     """
     
-    def __init__(self, *, registry: BundleRegistryStore, external: ExternalStore) -> None:
+    def __init__(self, *, registry: OciRegistry, external: ExternalStore, settings: Settings) -> None:
         """
         Initialize the provider with storage interfaces.
         
         Args:
-            registry: Bundle registry storage interface for registry operations
-            external: External storage interface for blob operations
+            registry: OCI registry interface for registry operations
+            external: External storage interface for blob operations  
+            settings: Settings for repository path construction
         """
         self._registry = registry
         self._external = external
+        self._settings = settings
     
     def iter_entries(
         self,
@@ -67,6 +72,11 @@ class BundleContentProvider(ContentProvider):
         Raises:
             ValueError: If layer index missing, invalid, or malformed
         """
+        # Build repository path from bundle name
+        if not resolved.ref.name:
+            raise ValueError("ResolvedBundle must have ref.name for repo-aware operations")
+        repo = build_repo(self._settings, resolved.ref.name)
+        
         for layer in layers:
             # 1. Check layer has index
             if layer not in resolved.layer_indexes:
@@ -75,8 +85,8 @@ class BundleContentProvider(ContentProvider):
             # 2. Fetch and validate index
             index_digest = resolved.layer_indexes[layer]
             try:
-                payload = self._registry.get_manifest(index_digest)
-            except KeyError:
+                payload = self._registry.get_blob(repo, index_digest)
+            except Exception:
                 raise ValueError(f"missing index manifest {_short_digest(index_digest)} for layer '{layer}'")
             
             try:
@@ -144,8 +154,8 @@ class BundleContentProvider(ContentProvider):
                         raise ValueError(f"invalid digest format for layer '{layer}' path '{path}': contains non-hex characters")
                     
                     try:
-                        blob = self._registry.get_blob(digest)
-                    except KeyError:
+                        blob = self._registry.get_blob(repo, digest)
+                    except Exception:
                         raise ValueError(f"missing blob {_short_digest(digest)} for layer '{layer}' path '{path}'")
                     
                     yield MatEntry(
@@ -180,7 +190,7 @@ def default_provider_from_env() -> BundleContentProvider:
     Create BundleContentProvider with real adapters from environment settings.
     
     This is the standard entry point for production use and CLI integration.
-    Loads settings from environment variables and creates real ORAS and 
+    Loads settings from environment variables and creates real OCI registry and 
     external storage adapters.
     
     Returns:
@@ -195,17 +205,18 @@ def default_provider_from_env() -> BundleContentProvider:
         >>> # Use with runtime.materialize(ref, dest, provider=provider)
     """
     from ..settings import load_settings_from_env
-    from ..storage.oras import OrasAdapter
+    from ..storage.registry_factory import make_registry
     from ..storage.object_store import AzureExternalAdapter
     
     settings = load_settings_from_env()
     
     # Create real adapters
-    oras_adapter = OrasAdapter(settings=settings)
+    registry = make_registry(settings)
     external_adapter = AzureExternalAdapter(settings=settings)
     
     return BundleContentProvider(
-        registry=oras_adapter,
-        external=external_adapter
+        registry=registry,
+        external=external_adapter,
+        settings=settings
     )
 

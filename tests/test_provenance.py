@@ -14,7 +14,7 @@ from unittest.mock import patch
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize
 from modelops_bundles.runtime_types import ContentProvider, MatEntry
-from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
 from collections.abc import Iterable
 
 
@@ -23,7 +23,7 @@ class TestProvenanceFile:
     
     def _create_test_setup(self):
         """Create test registry and mock resolved bundle."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         repository = "test/repo"
         
         # Create a mock resolved bundle
@@ -64,9 +64,7 @@ class TestProvenanceFile:
                 dest=str(tmp_path),
                 role="default",
                 provider=provider,
-                registry=registry,
-                repository=repository
-            )
+                registry=registry            )
         
         # Check that provenance file exists
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -118,9 +116,7 @@ class TestProvenanceFile:
                 dest=str(tmp_path),
                 role="training",
                 provider=provider,
-                registry=registry,
-                repository=repository
-            )
+                registry=registry            )
         
         # Read provenance file
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -168,9 +164,7 @@ class TestProvenanceFile:
                 dest=str(tmp_path),
                 role="default",
                 provider=provider,
-                registry=registry,
-                repository=repository
-            )
+                registry=registry            )
         
         # Read provenance file content as text
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
@@ -210,9 +204,7 @@ class TestProvenanceFile:
                 dest=str(tmp_path),
                 role="default", 
                 provider=provider,
-                registry=registry,
-                repository=repository
-            )
+                registry=registry            )
         
         provenance_path = tmp_path / ".mops" / ".mops-manifest.json"
         
@@ -240,9 +232,7 @@ class TestProvenanceFile:
                 role="training",
                 provider=provider,
                 overwrite=True,
-                registry=registry,
-                repository=repository
-            )
+                registry=registry            )
         
         # Read updated provenance
         with open(provenance_path, 'r') as f:

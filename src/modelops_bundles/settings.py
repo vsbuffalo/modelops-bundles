@@ -109,21 +109,21 @@ def load_settings_from_env() -> Settings:
     
     Environment Variables:
         ORAS/Registry:
-        - MODEL_OPS_REGISTRY_URL (required)
-        - MODEL_OPS_REGISTRY_REPO (required)
-        - MODEL_OPS_REGISTRY_INSECURE (default: false)
-        - MODEL_OPS_REGISTRY_USERNAME (optional)
-        - MODEL_OPS_REGISTRY_PASSWORD (optional)
-        - MODEL_OPS_HTTP_TIMEOUT (default: 30.0)
-        - MODEL_OPS_HTTP_RETRY (default: 0)
+        - MODELOPS_REGISTRY_URL (required)
+        - MODELOPS_REGISTRY_REPO (required)
+        - MODELOPS_REGISTRY_INSECURE (default: false)
+        - MODELOPS_REGISTRY_USERNAME (optional)
+        - MODELOPS_REGISTRY_PASSWORD (optional)
+        - MODELOPS_HTTP_TIMEOUT (default: 30.0)
+        - MODELOPS_HTTP_RETRY (default: 0)
         
         External Storage (Azure):
         - AZURE_STORAGE_CONNECTION_STRING (optional)
         - AZURE_STORAGE_ACCOUNT (optional)
         - AZURE_STORAGE_KEY (optional)
-        - MODEL_OPS_AZURE_BLOB_ENDPOINT (optional, for Azurite/custom endpoints)
-        - MODEL_OPS_EXT_TIMEOUT (default: 60.0)
-        - MODEL_OPS_ALLOW_STAT_WITHOUT_SHA (default: false)
+        - MODELOPS_AZURE_BLOB_ENDPOINT (optional, for Azurite/custom endpoints)
+        - MODELOPS_EXT_TIMEOUT (default: 60.0)
+        - MODELOPS_ALLOW_STAT_WITHOUT_SHA (default: false)
     
     Returns:
         Settings object with validated configuration
@@ -166,29 +166,29 @@ def _load_settings_impl() -> Settings:
         return int(value) if value else default
     
     # Registry settings
-    registry_url = os.getenv("MODEL_OPS_REGISTRY_URL")
-    registry_repo = os.getenv("MODEL_OPS_REGISTRY_REPO")
+    registry_url = os.getenv("MODELOPS_REGISTRY_URL")
+    registry_repo = os.getenv("MODELOPS_REGISTRY_REPO")
     
     if not registry_url:
-        raise ValueError("MODEL_OPS_REGISTRY_URL environment variable is required")
+        raise ValueError("MODELOPS_REGISTRY_URL environment variable is required")
     if not registry_repo:
-        raise ValueError("MODEL_OPS_REGISTRY_REPO environment variable is required")
+        raise ValueError("MODELOPS_REGISTRY_REPO environment variable is required")
     
-    registry_insecure = str_to_bool(os.getenv("MODEL_OPS_REGISTRY_INSECURE", "false"))
-    registry_user = os.getenv("MODEL_OPS_REGISTRY_USERNAME")
-    registry_pass = os.getenv("MODEL_OPS_REGISTRY_PASSWORD")
+    registry_insecure = str_to_bool(os.getenv("MODELOPS_REGISTRY_INSECURE", "false"))
+    registry_user = os.getenv("MODELOPS_REGISTRY_USERNAME")
+    registry_pass = os.getenv("MODELOPS_REGISTRY_PASSWORD")
     
-    http_timeout_s = get_float("MODEL_OPS_HTTP_TIMEOUT", 30.0)
-    http_retry = get_int("MODEL_OPS_HTTP_RETRY", 0)
+    http_timeout_s = get_float("MODELOPS_HTTP_TIMEOUT", 30.0)
+    http_retry = get_int("MODELOPS_HTTP_RETRY", 0)
     
     # External storage settings (Azure)
     az_connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     az_account = os.getenv("AZURE_STORAGE_ACCOUNT")
     az_key = os.getenv("AZURE_STORAGE_KEY")
-    az_blob_endpoint = os.getenv("MODEL_OPS_AZURE_BLOB_ENDPOINT")
+    az_blob_endpoint = os.getenv("MODELOPS_AZURE_BLOB_ENDPOINT")
     
-    ext_timeout_s = get_float("MODEL_OPS_EXT_TIMEOUT", 60.0)
-    allow_stat_without_sha = str_to_bool(os.getenv("MODEL_OPS_ALLOW_STAT_WITHOUT_SHA", "false"))
+    ext_timeout_s = get_float("MODELOPS_EXT_TIMEOUT", 60.0)
+    allow_stat_without_sha = str_to_bool(os.getenv("MODELOPS_ALLOW_STAT_WITHOUT_SHA", "false"))
     
     return Settings(
         registry_url=registry_url,

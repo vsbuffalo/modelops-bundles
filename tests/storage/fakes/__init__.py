@@ -1,6 +1,6 @@
 # Fake implementations for testing
 
-from .fake_oras import FakeBundleRegistryStore
 from .fake_external import FakeExternalStore
+from .fake_oci_registry import FakeOciRegistry
 
-__all__ = ["FakeBundleRegistryStore", "FakeExternalStore"]
+__all__ = ["FakeExternalStore", "FakeOciRegistry"]

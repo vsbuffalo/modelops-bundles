@@ -100,24 +100,12 @@ def print_materialize_summary(bundle: ResolvedBundle, dest: str, role: str) -> N
     typer.echo(f"Materialized {label} to {dest}")
     typer.echo(f"Role: {role}")
     
-    # Guard against unknown/missing roles
-    if role in bundle.roles:
-        layers = bundle.roles[role]
+    layers = bundle.roles.get(role)
+    if layers:
         typer.echo(f"Layers: {', '.join(layers)}")
-    elif role == "unknown":
-        if bundle.roles:
-            available_roles = list(bundle.roles.keys())
-            typer.echo(f"Available roles: {', '.join(available_roles)}")
-            # Show the first available role as the chosen one
-            first_role = available_roles[0]
-            typer.echo(f"Using first available role: {first_role}")
-        else:
-            typer.echo("No roles defined in bundle")
     else:
+        # Extremely defensive; runtime already validates role
         typer.echo(f"Role '{role}' not found in bundle")
-        if bundle.roles:
-            available_roles = list(bundle.roles.keys())
-            typer.echo(f"Available roles: {', '.join(available_roles)}")
 
 def print_export_summary(src_dir: str, out_path: str, include_external: bool) -> None:
     """
@@ -190,6 +178,28 @@ def print_conflicts(conflicts: List[dict], max_display: int = 5) -> None:
     
     if len(conflicts) > max_display:
         typer.echo(f"  ... and {len(conflicts) - max_display} more")
+
+def print_push_summary(digest: str, working_dir: str, bump: Optional[str] = None) -> None:
+    """
+    Print push operation summary.
+    
+    Args:
+        digest: Manifest digest of pushed bundle
+        working_dir: Working directory that was pushed
+        bump: Version bump strategy used (if any)
+    """
+    if _RICH:
+        _console.print(f"[green]✅ Successfully pushed bundle from {working_dir}[/]")
+        if bump:
+            _console.print(f"[bold]Version bump:[/] {bump}")
+        _console.print(f"[bold]Manifest digest:[/] [dim]{digest}[/]")
+        return
+    
+    # Fallback to plain text
+    typer.echo(f"✅ Successfully pushed bundle from {working_dir}")
+    if bump:
+        typer.echo(f"Version bump: {bump}")
+    typer.echo(f"Manifest digest: {digest}")
 
 def print_stub_message(command: str) -> None:
     """

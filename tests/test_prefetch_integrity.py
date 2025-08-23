@@ -15,7 +15,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize, WorkdirConflict
 from modelops_bundles.runtime_types import MatEntry
 from modelops_bundles.runtime_types import ContentProvider
-from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
 
 
 class TestPrefetchIntegrity:
@@ -23,7 +23,7 @@ class TestPrefetchIntegrity:
     
     def _create_test_setup(self):
         """Create test registry and mock resolved bundle."""
-        registry = FakeBundleRegistryStore()
+        registry = FakeOciRegistry()
         repository = "test/repo"
         
         # Create a mock resolved bundle
@@ -77,9 +77,7 @@ class TestPrefetchIntegrity:
                     role="default",
                     provider=provider,
                     prefetch_external=True,
-                    registry=registry,
-                    repository=repository
-                )
+                    registry=registry)
         
         # Verify the conflict details
         error = exc_info.value
@@ -124,8 +122,7 @@ class TestPrefetchIntegrity:
                 role="default",
                 provider=provider,
                 prefetch_external=True,
-                registry=registry,
-                repository=repository
+                registry=registry
             )
         
         # Verify data was written correctly
@@ -180,8 +177,7 @@ class TestPrefetchIntegrity:
                 role="default",
                 provider=provider,
                 prefetch_external=False,  # Only create pointer, don't fetch data
-                registry=registry,
-                repository=repository
+                registry=registry
             )
         
         # Verify actual data file was NOT created
@@ -250,9 +246,7 @@ class TestPrefetchIntegrity:
                     role="default", 
                     provider=provider,
                     prefetch_external=True,
-                    registry=registry,
-                    repository=repository
-                )
+                    registry=registry)
         
         # Verify only the corrupt file is in conflicts
         error = exc_info.value

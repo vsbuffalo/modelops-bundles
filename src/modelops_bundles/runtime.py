@@ -19,12 +19,16 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from .path_safety import safe_relpath
 from .pointer_writer import write_pointer_file
 from .runtime_types import ContentProvider, MatEntry
-from .storage.base import BundleRegistryStore
+# TYPE_CHECKING import to avoid circular imports  
+from typing import TYPE_CHECKING
 
-__all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
+if TYPE_CHECKING:
+    from .storage.oci_registry import OciRegistry
+
+__all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError", "BundleDownloadError", "UnsupportedMediaType"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class MaterializeResult:
     """
     Result of bundle materialization with runtime context.
@@ -39,7 +43,25 @@ class MaterializeResult:
 
 
 
-# Exception Types
+# Exception Types  
+class BundleDownloadError(Exception):
+    """
+    Raised when bundle download fails due to network, auth, or registry errors.
+    
+    This corresponds to exit code 3 in the CLI.
+    """
+    pass
+
+
+class UnsupportedMediaType(Exception):
+    """
+    Raised when media type is not supported or unrecognized.
+    
+    This corresponds to exit code 10 in the CLI.
+    """
+    pass
+
+
 class WorkdirConflict(Exception):
     """
     Raised when materialize() encounters files that conflict with expected content.
@@ -69,133 +91,52 @@ class BundleNotFoundError(Exception):
     pass
 
 
-class UnsupportedMediaType(Exception):
+def resolve(ref: BundleRef, *, registry: 'OciRegistry' = None, settings = None, cache: bool = True) -> ResolvedBundle:
     """
-    Raised when manifest has unsupported media type.
+    Resolve bundle identity using repo-aware OCI registry operations.
     
-    This corresponds to exit code 10 in the CLI.
-    """
-    pass
-
-
-def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | None = None, cache: bool = True) -> ResolvedBundle:
-    """
-    Resolve bundle identity without side-effects (no FS writes).
-    
-    Makes network calls to registry to resolve real bundle manifests and
-    compute total sizes from layer indexes.
-    
-    Note: The total_size field reflects only external file sizes from
-    layer indexes as a best-effort calculation. ORAS blob sizes are not
-    included since they would require additional registry round-trips.
-    
-    This function:
-    - Accepts BundleRef with one of: (name, version), digest, or local_path
-    - Fetches bundle manifest from OCI registry via BundleRegistryStore
-    - Parses roles, layers, and layer_indexes from manifest
-    - Computes total_size by peeking at layer indexes (best-effort)
-    - Returns ResolvedBundle with real content addresses and metadata
-    - Does NOT download blobs, create files, or write to workdir
+    This function provides a clean, injectable interface for bundle resolution
+    that works with any OciRegistry implementation (real or fake).
     
     Args:
-        ref: Bundle reference to resolve
-        cache: Whether to prepare cache directory structure (not implemented yet)
-        registry: BundleRegistryStore for registry access
-        repository: Repository namespace (e.g., "myorg/bundles") - required for name+version refs
+        ref: Bundle reference (must include name)
+        registry: Optional OCI registry (defaults to HybridOciRegistry)
+        settings: Optional settings (defaults to loading from environment)
+        cache: Whether to prepare cache directory structure
         
     Returns:
-        ResolvedBundle with manifest digest, roles, and metadata
+        ResolvedBundle with canonical digest and bundle metadata
         
     Raises:
-        BundleNotFoundError: If bundle cannot be found in registry
-        ValueError: If ref is malformed or manifest has invalid format
-    """
-    # Validate BundleRef constraints are met
-    if not any([ref.local_path, ref.digest, (ref.name and ref.version)]):
-        raise ValueError("BundleRef must specify exactly one of: local_path, digest, or name+version")
-    
-    # Determine manifest reference from BundleRef
-    if ref.digest:
-        # Normalize digest to lowercase (some registries reject uppercase hex)
-        ref = ref.model_copy(update={'digest': ref.digest.lower()})
-        manifest_ref = ref.digest
-    elif ref.name and ref.version:
-        if "/" in ref.name:
-            raise ValueError("Bundle names cannot contain '/'. Use digest or full registry path")
-        if not repository:
-            raise ValueError("repository required for name+version refs")
-        # Compose OCI reference from registry repo + name:version
-        manifest_ref = f"{repository.rstrip('/')}/{ref.name}:{ref.version}"
-    elif ref.local_path:
-        # Local path support (future feature)
-        raise ValueError("Local path support not yet implemented")
-    else:
-        raise ValueError("Invalid BundleRef: no resolvable reference found")
-    
-    # Fetch bundle manifest from registry
-    try:
-        payload = registry.get_manifest(manifest_ref)
-    except KeyError as e:
-        raise BundleNotFoundError(f"Bundle manifest not found: {manifest_ref}") from e
-    
-    # Parse manifest JSON
-    try:
-        doc = json.loads(payload.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ValueError(f"Invalid manifest JSON: {e}") from e
-    
-    # Validate media type
-    from modelops_contracts.artifacts import BUNDLE_MANIFEST, LAYER_INDEX
-    media_type = doc.get("mediaType")
-    if media_type != BUNDLE_MANIFEST:
-        raise UnsupportedMediaType(f"Invalid manifest mediaType: expected {BUNDLE_MANIFEST}, got {media_type!r}")
-    
-    # Parse manifest fields
-    roles = doc.get("roles", {})
-    layers = doc.get("layers", [])
-    layer_indexes = doc.get("layer_indexes", {})
-    external_index_present = bool(doc.get("external_index_present", True))
-    
-    # Compute best-effort total_size by peeking at layer indexes
-    total_size = 0
-    for layer in layers:
-        layer_index_digest = layer_indexes.get(layer)
-        if not layer_index_digest:
-            continue
+        ValueError: If ref doesn't include name or is malformed
+        BundleNotFoundError: If bundle cannot be found
+        OciError: For registry operation errors
         
-        try:
-            # Fetch layer index to sum external file sizes
-            index_payload = registry.get_manifest(layer_index_digest)
-            index_doc = json.loads(index_payload.decode("utf-8"))
-            
-            # Validate layer index media type
-            if index_doc.get("mediaType") != LAYER_INDEX:
-                raise UnsupportedMediaType(f"Invalid LAYER_INDEX mediaType for layer '{layer}': expected {LAYER_INDEX}, got {index_doc.get('mediaType')!r}")
-            
-            # Sum external entry sizes
-            for entry in index_doc.get("entries", []):
-                external = entry.get("external")
-                if external and "size" in external:
-                    total_size += int(external["size"])
-                    
-        except (KeyError, json.JSONDecodeError, ValueError, UnsupportedMediaType):
-            # Layer index not found or malformed - will surface during materialize
-            # Don't fail resolve, just continue with partial size
-            continue
+    Examples:
+        >>> # Use default registry
+        >>> resolved = resolve(BundleRef(name="my-bundle", version="1.0"))
+        
+        >>> # Inject specific registry (e.g., for testing)
+        >>> fake_registry = FakeOciRegistry()
+        >>> resolved = resolve(ref, registry=fake_registry, settings=fake_settings)
+    """
+    # Validate ref has required name field
+    if not ref.name:
+        raise ValueError("BundleRef must include name (bare digests not supported)")
     
-    # Compute canonical manifest digest
-    manifest_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    # Load settings if not provided
+    if settings is None:
+        from .settings import load_settings_from_env
+        settings = load_settings_from_env()
     
-    return ResolvedBundle(
-        ref=ref,
-        manifest_digest=manifest_digest,
-        roles=roles,
-        layers=layers,
-        external_index_present=external_index_present,
-        total_size=total_size,
-        cache_dir=None,  # Cache not implemented yet
-        layer_indexes=layer_indexes
-    )
+    # Use provided registry or create default
+    if registry is None:
+        from .storage.registry_factory import make_registry
+        registry = make_registry(settings)
+    
+    # Use new OCI-based resolver
+    from .storage.resolve_oci import resolve_oci
+    return resolve_oci(ref, registry, settings, cache)
 
 
 def materialize(
@@ -206,8 +147,7 @@ def materialize(
     overwrite: bool = False,
     prefetch_external: bool = False,
     provider: ContentProvider,
-    registry: BundleRegistryStore,
-    repository: str | None = None,
+    registry: 'OciRegistry' = None,
 ) -> MaterializeResult:
     """
     Mirror layers for the selected role into dest.
@@ -227,11 +167,10 @@ def materialize(
         overwrite: Whether to overwrite conflicting files
         prefetch_external: Whether to download external data immediately
         provider: ContentProvider to enumerate entries for materialization
-        registry: BundleRegistryStore for registry access
-        repository: Repository namespace - required for name+version refs
+        registry: Optional OCI registry (defaults to HybridOciRegistry)
         
     Returns:
-        Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
+        MaterializeResult containing bundle, selected_role, and dest_path
         
     Raises:
         RoleLayerMismatch: If role doesn't exist or references missing layers
@@ -239,7 +178,7 @@ def materialize(
         BundleNotFoundError: If bundle cannot be found
     """
     # First resolve the bundle to get metadata
-    resolved = resolve(ref, registry=registry, repository=repository)
+    resolved = resolve(ref, registry=registry)
     
     # Select role using precedence rules
     selected_role = _select_role(resolved, ref, role)
@@ -370,7 +309,7 @@ def _materialize_oras_file(
         target_path: Where to write the file
         content: File content bytes
         overwrite: Whether to overwrite conflicts
-        conflicts: List to append conflict info to
+        conflicts: List to append conflict info to (side-effects)
         base_dir: Base directory for relative path computation
     """
     if not target_path.exists():

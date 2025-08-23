@@ -198,21 +198,21 @@ class TestCLISmokeTests:
         assert result.exit_code == 0
         assert "Resolve bundle identity" in result.stdout
 
-    @patch('modelops_bundles.cli._create_registry_store')
-    def test_provider_injection(self, mock_create_registry_store):
-        """Test that registry store injection works correctly."""
-        from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
-        from modelops_bundles.cli import _add_fake_manifests
+    @patch('modelops_bundles.cli._create_fake_registry')
+    def test_provider_injection(self, mock_create_fake_registry):
+        """Test that registry injection works correctly."""
+        from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+        from modelops_bundles.cli import _add_fake_manifests_oci
         
-        mock_registry = FakeBundleRegistryStore()
-        _add_fake_manifests(mock_registry)  # Add the expected manifests
-        mock_create_registry_store.return_value = mock_registry
+        mock_registry = FakeOciRegistry()
+        _add_fake_manifests_oci(mock_registry)  # Add the expected manifests
+        mock_create_fake_registry.return_value = mock_registry
         
         result = self.runner.invoke(app, [
             "resolve", "bundle:v1.0.0", "--provider", "fake"
         ])
         
-        mock_create_registry_store.assert_called_once_with("fake")
+        mock_create_fake_registry.assert_called_once()
         assert result.exit_code == 0
 
     def test_default_arguments(self):

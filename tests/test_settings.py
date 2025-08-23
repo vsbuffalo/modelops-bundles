@@ -161,8 +161,8 @@ class TestLoadSettingsFromEnv:
     def test_minimal_env_settings(self):
         """Test loading with minimal required environment variables."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/repo"
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/repo"
         }
         
         with patch.dict(os.environ, env, clear=True):
@@ -177,16 +177,16 @@ class TestLoadSettingsFromEnv:
     def test_full_env_settings_with_connection_string(self):
         """Test loading all settings with Azure connection string."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "https://myregistry.azurecr.io",
-            "MODEL_OPS_REGISTRY_REPO": "test/repo",
-            "MODEL_OPS_REGISTRY_INSECURE": "true",
-            "MODEL_OPS_REGISTRY_USERNAME": "testuser",
-            "MODEL_OPS_REGISTRY_PASSWORD": "testpass",
-            "MODEL_OPS_HTTP_TIMEOUT": "45.5",
-            "MODEL_OPS_HTTP_RETRY": "3",
+            "MODELOPS_REGISTRY_URL": "https://myregistry.azurecr.io",
+            "MODELOPS_REGISTRY_REPO": "test/repo",
+            "MODELOPS_REGISTRY_INSECURE": "true",
+            "MODELOPS_REGISTRY_USERNAME": "testuser",
+            "MODELOPS_REGISTRY_PASSWORD": "testpass",
+            "MODELOPS_HTTP_TIMEOUT": "45.5",
+            "MODELOPS_HTTP_RETRY": "3",
             "AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=key",
-            "MODEL_OPS_EXT_TIMEOUT": "120.0",
-            "MODEL_OPS_ALLOW_STAT_WITHOUT_SHA": "true"
+            "MODELOPS_EXT_TIMEOUT": "120.0",
+            "MODELOPS_ALLOW_STAT_WITHOUT_SHA": "true"
         }
         
         with patch.dict(os.environ, env, clear=True):
@@ -204,8 +204,8 @@ class TestLoadSettingsFromEnv:
     def test_env_settings_with_account_key(self):
         """Test loading settings with Azure account + key."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/repo",
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/repo",
             "AZURE_STORAGE_ACCOUNT": "testaccount",
             "AZURE_STORAGE_KEY": "testkey123=="
         }
@@ -219,7 +219,7 @@ class TestLoadSettingsFromEnv:
     def test_missing_registry_url_env_raises(self):
         """Test that missing registry URL environment variable raises ValueError."""
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="MODEL_OPS_REGISTRY_URL environment variable is required"):
+            with pytest.raises(ValueError, match="MODELOPS_REGISTRY_URL environment variable is required"):
                 load_settings_from_env()
     
     def test_bool_env_parsing(self):
@@ -241,9 +241,9 @@ class TestLoadSettingsFromEnv:
         
         for env_value, expected in test_cases:
             env = {
-                "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-                "MODEL_OPS_REGISTRY_REPO": "test/repo",
-                "MODEL_OPS_REGISTRY_INSECURE": env_value
+                "MODELOPS_REGISTRY_URL": "localhost:5000",
+                "MODELOPS_REGISTRY_REPO": "test/repo",
+                "MODELOPS_REGISTRY_INSECURE": env_value
             }
             
             reset_settings_cache()
@@ -254,11 +254,11 @@ class TestLoadSettingsFromEnv:
     def test_numeric_env_parsing(self):
         """Test parsing of numeric environment variables."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/repo",
-            "MODEL_OPS_HTTP_TIMEOUT": "25.5",
-            "MODEL_OPS_HTTP_RETRY": "5",
-            "MODEL_OPS_EXT_TIMEOUT": "90.0"
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/repo",
+            "MODELOPS_HTTP_TIMEOUT": "25.5",
+            "MODELOPS_HTTP_RETRY": "5",
+            "MODELOPS_EXT_TIMEOUT": "90.0"
         }
         
         with patch.dict(os.environ, env, clear=True):
@@ -270,9 +270,9 @@ class TestLoadSettingsFromEnv:
     def test_invalid_numeric_env_raises(self):
         """Test that invalid numeric values raise appropriate errors."""
         env = {
-            "MODEL_OPS_REGISTRY_URL": "localhost:5000",
-            "MODEL_OPS_REGISTRY_REPO": "test/repo",
-            "MODEL_OPS_HTTP_TIMEOUT": "not-a-number"
+            "MODELOPS_REGISTRY_URL": "localhost:5000",
+            "MODELOPS_REGISTRY_REPO": "test/repo",
+            "MODELOPS_HTTP_TIMEOUT": "not-a-number"
         }
         
         with patch.dict(os.environ, env, clear=True):
@@ -281,14 +281,14 @@ class TestLoadSettingsFromEnv:
     
     def test_caching_behavior(self):
         """Test that settings are cached after first load."""
-        env = {"MODEL_OPS_REGISTRY_URL": "localhost:5000", "MODEL_OPS_REGISTRY_REPO": "test/repo"}
+        env = {"MODELOPS_REGISTRY_URL": "localhost:5000", "MODELOPS_REGISTRY_REPO": "test/repo"}
         
         with patch.dict(os.environ, env, clear=True):
             # First call loads from env
             settings1 = load_settings_from_env()
             
             # Change env but should get cached result
-            os.environ["MODEL_OPS_REGISTRY_URL"] = "changed:6000"
+            os.environ["MODELOPS_REGISTRY_URL"] = "changed:6000"
             settings2 = load_settings_from_env()
             
             assert settings1 is settings2  # Same object
@@ -296,8 +296,8 @@ class TestLoadSettingsFromEnv:
     
     def test_cache_reset(self):
         """Test that cache reset allows reloading settings."""
-        env1 = {"MODEL_OPS_REGISTRY_URL": "localhost:5000", "MODEL_OPS_REGISTRY_REPO": "test/repo"}
-        env2 = {"MODEL_OPS_REGISTRY_URL": "localhost:6000", "MODEL_OPS_REGISTRY_REPO": "test/repo"}
+        env1 = {"MODELOPS_REGISTRY_URL": "localhost:5000", "MODELOPS_REGISTRY_REPO": "test/repo"}
+        env2 = {"MODELOPS_REGISTRY_URL": "localhost:6000", "MODELOPS_REGISTRY_REPO": "test/repo"}
         
         with patch.dict(os.environ, env1, clear=True):
             settings1 = load_settings_from_env()

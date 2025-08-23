@@ -13,7 +13,56 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from ..runtime import resolve as _resolve, materialize as _materialize, MaterializeResult
 from ..runtime_types import ContentProvider
-from ..storage.base import BundleRegistryStore
+from ..storage.oci_registry import OciRegistry
+from ..settings import load_settings_from_env
+from ..storage.registry_factory import make_registry
+
+
+def _apply_version_bump(current_version: str, bump: str) -> str:
+    """
+    Apply semantic version bump to current version.
+    
+    Args:
+        current_version: Current version string (e.g., "1.2.3")
+        bump: Bump strategy ("patch", "minor", "major")
+        
+    Returns:
+        New version string
+        
+    Raises:
+        ValueError: If version format is invalid or bump strategy is unknown
+    """
+    # Simple semver parsing - handle "v" prefix
+    version = current_version.lstrip("v")
+    
+    try:
+        parts = version.split(".")
+        if len(parts) != 3:
+            raise ValueError("Version must be in format 'major.minor.patch'")
+        
+        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+        
+        if bump == "patch":
+            patch += 1
+        elif bump == "minor":
+            minor += 1
+            patch = 0
+        elif bump == "major":
+            major += 1
+            minor = 0
+            patch = 0
+        else:
+            raise ValueError(f"Unknown bump strategy: {bump}. Use 'patch', 'minor', or 'major'")
+        
+        # Preserve "v" prefix if it was present
+        new_version = f"{major}.{minor}.{patch}"
+        if current_version.startswith("v"):
+            new_version = f"v{new_version}"
+        
+        return new_version
+        
+    except (ValueError, IndexError) as e:
+        raise ValueError(f"Invalid version format '{current_version}': {e}") from e
 
 @dataclass(frozen=True)
 class OpsConfig:
@@ -50,32 +99,29 @@ class Operations:
     """
     
     def __init__(self, config: OpsConfig, provider: Optional[ContentProvider] = None, 
-                 registry: Optional[BundleRegistryStore] = None, repository: Optional[str] = None):
+                 registry: Optional[OciRegistry] = None, settings = None):
         """
         Initialize Operations facade.
         
         Args:
             config: Configuration settings
             provider: Content provider for materialize operations (None for resolve-only)
-            registry: Bundle registry store (if None, loaded from environment)
-            repository: Repository namespace (if None, loaded from environment)
+            registry: OCI registry (if None, loaded from environment)
+            settings: Optional settings (if None, loaded from environment)
         """
         self.cfg = config
         self.provider = provider
         
-        if registry is not None:
-            # Use provided registry and repository (explicit injection)
-            if repository is None:
-                raise ValueError("repository must be provided when injecting registry")
-            self.registry = registry
-            self.repository = repository
-        else:
-            # Create registry and repository from environment settings
-            from ..settings import load_settings_from_env
-            from ..storage.oras import OrasAdapter
+        # Load settings if not provided
+        if settings is None:
             settings = load_settings_from_env()
-            self.registry = OrasAdapter(settings=settings)
-            self.repository = settings.registry_repo
+        self.settings = settings
+        
+        # Create registry if not provided
+        if registry is None:
+            self.registry = make_registry(settings)
+        else:
+            self.registry = registry
 
     def resolve(self, ref: BundleRef) -> ResolvedBundle:
         """
@@ -87,7 +133,7 @@ class Operations:
         Returns:
             Resolved bundle with manifest digest and metadata
         """
-        return _resolve(ref, registry=self.registry, repository=self.repository, cache=self.cfg.cache)
+        return _resolve(ref, registry=self.registry, settings=self.settings, cache=self.cfg.cache)
 
     def materialize(self, ref: BundleRef, dest: str, *,
                     role: Optional[str] = None,
@@ -104,7 +150,7 @@ class Operations:
             prefetch_external: Whether to download external data immediately
             
         Returns:
-            Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
+            MaterializeResult containing bundle, selected_role, and dest_path
             
         Raises:
             AssertionError: If no provider configured for materialization
@@ -118,8 +164,7 @@ class Operations:
             overwrite=overwrite,
             prefetch_external=prefetch_external,
             provider=self.provider,
-            registry=self.registry,
-            repository=self.repository
+            registry=self.registry
         )
 
     def pull(self, ref: BundleRef, dest: str, *,
@@ -137,7 +182,7 @@ class Operations:
             prefetch_external: Whether to download external data immediately
             
         Returns:
-            Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
+            MaterializeResult containing bundle, selected_role, and dest_path
         """
         return self.materialize(
             ref=ref,
@@ -216,18 +261,36 @@ class Operations:
         """
         return f"Diff for {ref_or_path} (stub)"
 
-    def push(self, working_dir: str, *, bump: Optional[str] = None) -> str:
+    def push(self, working_dir: str, *, bump: Optional[str] = None, 
+             dry_run: bool = False, force: bool = False) -> str:
         """
         Push bundle to registry.
-        
-        Stubbed implementation.
         
         Args:
             working_dir: Directory containing bundle
             bump: Version bump strategy (patch, minor, major)
+            dry_run: Show what would be pushed without actually pushing
+            force: Skip change detection and always push
             
         Returns:
-            Human-readable push results
+            Canonical manifest digest (sha256:...)
         """
-        bump_info = f" with {bump} bump" if bump else ""
-        return f"Pushed {working_dir}{bump_info} (stub)"
+        from ..publisher import push_bundle
+        from ..planner import scan_directory
+        from pathlib import Path
+        
+        spec = scan_directory(Path(working_dir))
+        
+        # Apply version bump if requested
+        tag = spec.version
+        if bump:
+            tag = _apply_version_bump(spec.version, bump)
+        
+        # Push bundle and return digest - let publisher compute repo
+        return push_bundle(
+            working_dir=working_dir,
+            tag=tag,
+            registry=self.registry,
+            dry_run=dry_run,
+            force=force
+        )

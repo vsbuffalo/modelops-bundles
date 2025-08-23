@@ -143,6 +143,29 @@ Our architecture uses a **hybrid storage strategy** that optimizes for both cost
 - **Integrity**: All files tracked with SHA256 checksums regardless of storage location
 - **Discovery**: Registry manifest provides single source of truth for all bundle contents
 
+#### Why Layer Indexes Exist
+
+Instead of embedding file paths directly in the bundle manifest, we use separate layer indexes for important architectural reasons:
+
+**1. Granularity** — Each layer is independently hashable & cacheable. If only the code layer changes, its digest changes, but data doesn't. This enables incremental updates and efficient caching.
+
+**2. Re-use** — Two bundles can share a layer (e.g., same code layer across versions). The registry's content-addressable storage automatically deduplicates shared layers, saving space and bandwidth.
+
+**3. Size** — Big data can be referenced externally, but the small JSON indexes (KBs) live in the registry. This keeps registry operations fast while supporting TB-scale datasets.
+
+**4. Separation of concerns** — The bundle manifest says "role X needs layers [a, b, c]"; the layer index says "layer a contains these files and their addresses." This clean separation enables role-based materialization and fine-grained access control.
+
+**Analogy with Docker:**
+- Docker image manifest lists layers by digest
+- Each layer tarball contains files
+
+**In our system:**
+- Bundle manifest lists layer indexes by digest  
+- Each layer index JSON contains file paths and their digests/URIs
+- ORAS blobs or external storage hold the actual bytes
+
+This architecture enables efficient, role-aware bundle consumption while maintaining integrity and supporting massive datasets.
+
 ### 1.4 Component Architecture
 
 Here's how the components relate in our layered, protocol-based design:
