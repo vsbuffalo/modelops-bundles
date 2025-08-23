@@ -1,0 +1,30 @@
+apiVersion: modelops.dev/v1alpha1
+kind: Bundle
+metadata:
+  name: azure-test-bundle
+  version: v1.0.0
+  description: Test bundle with Azure external data references
+
+spec:
+  layers:
+    - name: code
+      type: code
+      files:
+        - src/**
+    - name: data
+      type: data
+      external:
+        - path: training_data/
+          source: azure://devstoreaccount1/testdata/training/
+          digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        - path: models/pretrained.pkl
+          source: azure://devstoreaccount1/models/pretrained-v1.0.0.pkl
+          digest: sha256:a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3
+
+  roles:
+    default:
+      layers: [code]
+    training:
+      layers: [code, data]
+    runtime:
+      layers: [code]

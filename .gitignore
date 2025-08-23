@@ -17,3 +17,10 @@ wheels/
 # Temporary export archives
 *.tar
 *.tar.zst
+
+# Test output files
+*.out
+
+# Temporary test directories from CLI testing
+test-materialize/
+test-export/

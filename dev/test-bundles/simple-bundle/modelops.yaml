@@ -1,0 +1,23 @@
+apiVersion: modelops.dev/v1alpha1
+kind: Bundle
+metadata:
+  name: simple-test-bundle
+  version: v1.0.0
+  description: Simple test bundle for local development
+
+spec:
+  layers:
+    - name: code
+      type: code
+      files:
+        - src/**
+    - name: config
+      type: config
+      files:
+        - config/**
+
+  roles:
+    default:
+      layers: [code, config]
+    runtime:
+      layers: [code, config]

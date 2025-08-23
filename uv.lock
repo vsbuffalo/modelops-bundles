@@ -454,7 +454,6 @@ name = "modelops-bundles"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "azure-storage-blob" },
     { name = "boto3" },
     { name = "modelops-contracts" },
     { name = "oras" },
@@ -467,12 +466,12 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "azure-storage-blob" },
     { name = "httpx" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-storage-blob", specifier = ">=12.19.0" },
     { name = "boto3", specifier = ">=1.40.14" },
     { name = "modelops-contracts", editable = "../modelops-contracts" },
     { name = "oras", specifier = ">=0.2.37" },
@@ -484,7 +483,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "httpx", specifier = ">=0.28.1" }]
+dev = [
+    { name = "azure-storage-blob", specifier = ">=12.26.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+]
 
 [[package]]
 name = "modelops-contracts"

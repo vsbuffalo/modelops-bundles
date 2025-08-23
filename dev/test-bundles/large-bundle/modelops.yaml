@@ -1,0 +1,31 @@
+apiVersion: modelops.dev/v1alpha1
+kind: Bundle
+metadata:
+  name: large-test-bundle
+  version: v1.0.0
+  description: Large test bundle for performance and stress testing
+
+spec:
+  layers:
+    - name: code
+      type: code
+      files:
+        - src/**
+    - name: data
+      type: data
+      files:
+        - data/**
+    - name: models
+      type: models
+      files:
+        - models/**
+
+  roles:
+    default:
+      layers: [code]
+    training:
+      layers: [code, data]
+    inference:
+      layers: [code, models]
+    full:
+      layers: [code, data, models]

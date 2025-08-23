@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "azure-storage-blob>=12.19.0",
     "boto3>=1.40.14",
     "modelops-contracts",
     "oras>=0.2.37",
@@ -22,6 +21,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "azure-storage-blob>=12.26.0",
     "httpx>=0.28.1",
 ]
 

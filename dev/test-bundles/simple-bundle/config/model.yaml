@@ -1,0 +1,14 @@
+model:
+  name: simple-test-model
+  version: "1.0.0"
+  type: classifier
+  
+  parameters:
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 10
+  
+  metadata:
+    created: "2025-08-23"
+    framework: "test"
+    purpose: "local development testing"
