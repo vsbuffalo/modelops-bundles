@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Optional
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
-from ..runtime import resolve as _resolve, materialize as _materialize
+from ..runtime import resolve as _resolve, materialize as _materialize, MaterializeResult
 from ..runtime_types import ContentProvider
 from ..storage.base import BundleRegistryStore
 
@@ -27,6 +27,7 @@ class OpsConfig:
     cache: bool = True            # Enable bundle caching
     zstd_level: int = 19          # Fixed compression level for determinism
     human: bool = True            # Human text output (JSON mode in future)
+    verbose: bool = False         # Show detailed output
 
 class Operations:
     """
@@ -91,7 +92,7 @@ class Operations:
     def materialize(self, ref: BundleRef, dest: str, *,
                     role: Optional[str] = None,
                     overwrite: bool = False,
-                    prefetch_external: bool = False) -> ResolvedBundle:
+                    prefetch_external: bool = False) -> MaterializeResult:
         """
         Materialize bundle layers to filesystem.
         
@@ -103,7 +104,7 @@ class Operations:
             prefetch_external: Whether to download external data immediately
             
         Returns:
-            Resolved bundle that was materialized
+            Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
             
         Raises:
             AssertionError: If no provider configured for materialization
@@ -124,7 +125,7 @@ class Operations:
     def pull(self, ref: BundleRef, dest: str, *,
              role: Optional[str] = None,
              overwrite: bool = False,
-             prefetch_external: bool = False) -> ResolvedBundle:
+             prefetch_external: bool = False) -> MaterializeResult:
         """
         Pull bundle (alias for materialize).
         
@@ -136,7 +137,7 @@ class Operations:
             prefetch_external: Whether to download external data immediately
             
         Returns:
-            Resolved bundle that was pulled
+            Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
         """
         return self.materialize(
             ref=ref,
@@ -169,13 +170,13 @@ class Operations:
             zstd_level=self.cfg.zstd_level
         )
 
-    # Stubbed commands for Stage 5 (smoke testing with fakes)
+    # Stubbed commands for development
     
     def scan(self, working_dir: str) -> str:
         """
         Scan working directory for bundle configuration.
         
-        Stage 5: Stubbed for smoke testing.
+        Stubbed implementation.
         
         Args:
             working_dir: Directory to scan
@@ -189,7 +190,7 @@ class Operations:
         """
         Show storage plan for bundle creation.
         
-        Stage 5: Stubbed for smoke testing.
+        Stubbed implementation.
         
         Args:
             working_dir: Directory to analyze
@@ -205,7 +206,7 @@ class Operations:
         """
         Compare bundle or working directory.
         
-        Stage 5: Stubbed for smoke testing.
+        Stubbed implementation.
         
         Args:
             ref_or_path: Bundle reference or local path
@@ -219,7 +220,7 @@ class Operations:
         """
         Push bundle to registry.
         
-        Stage 5: Stubbed for smoke testing.
+        Stubbed implementation.
         
         Args:
             working_dir: Directory containing bundle

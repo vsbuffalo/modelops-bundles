@@ -9,8 +9,8 @@ from __future__ import annotations
 import pytest
 
 from modelops_bundles.storage.base import ExternalStat
-from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_external import FakeExternalStore
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
 class TestFakeBundleRegistryStore:

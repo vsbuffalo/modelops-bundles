@@ -32,7 +32,7 @@ class BundleContentProvider(ContentProvider):
     This provider accepts storage implementations via dependency injection,
     enabling testing with fakes and production use with real implementations.
     
-    Stage 2: Constructor accepts stores, iter_entries() is implemented in Stage 3.
+    Constructor accepts stores and implements iter_entries() interface.
     """
     
     def __init__(self, *, registry: BundleRegistryStore, external: ExternalStore) -> None:
@@ -159,7 +159,7 @@ class BundleContentProvider(ContentProvider):
         """
         Fetch external content using the external store.
         
-        Stage 2: This path will be exercised only if entries are manually injected.
+        This path is used when entries have external storage references.
         
         Args:
             entry: MatEntry with external metadata

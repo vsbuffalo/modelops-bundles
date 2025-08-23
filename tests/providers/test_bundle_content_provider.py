@@ -12,8 +12,8 @@ import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
-from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime_types import MatEntry
 
 

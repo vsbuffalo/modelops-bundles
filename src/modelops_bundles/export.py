@@ -238,6 +238,10 @@ def _validate_archive_path(path: str) -> None:
     if rel.is_absolute() or ".." in rel.parts:
         raise ValueError(f"unsafe archive path: {path}")
     
+    # Security: Check for NUL bytes which can cause path truncation
+    if "\x00" in s:
+        raise ValueError(f"archive path contains NUL byte: {path}")
+    
     # Note: We allow .mops paths for metadata in archives
 
 def _apply_canonical_headers(tarinfo: tarfile.TarInfo) -> None:

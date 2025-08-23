@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "azure-storage-blob>=12.19.0",
     "boto3>=1.40.14",
     "modelops-contracts",
+    "oras>=0.2.37",
     "pytest>=8.4.1",
     "rich>=14.1.0",
     "testcontainers[registry]>=4.12.0",
@@ -21,7 +23,6 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
-    "oras>=0.2.37",
 ]
 
 [tool.uv.sources]
@@ -30,6 +31,9 @@ modelops-contracts = { path = "../modelops-contracts", editable = true }
 [project.scripts]
 modelops-bundles = "modelops_bundles.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-exclude = ["modelops_bundles.storage.fakes*"]
+[tool.hatch.build]
+exclude = [
+    "*.pyc", 
+    "__pycache__",
+    "/tests"
+]

@@ -14,9 +14,9 @@ import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
-from modelops_bundles.storage.fakes.fake_external import FakeExternalStore
-from modelops_bundles.runtime import materialize, WorkdirConflict
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_external import FakeExternalStore
+from modelops_bundles.runtime import materialize, resolve, WorkdirConflict
 
 
 def _layer_index_doc(entries):
@@ -116,8 +116,8 @@ class TestRuntimeWithOrasExternal:
                 repository="test/repo"
             )
 
-            # Check that resolve result is returned
-            assert result == resolved
+            # Check that resolve result is returned in MaterializeResult
+            assert result.bundle == resolved
 
             # ORAS files should be written
             dest_path = Path(dest)
@@ -345,8 +345,8 @@ class TestRuntimeWithOrasExternal:
                 repository="test/repo"
             )
             
-            # Results should be identical
-            assert result1 == result2
+            # Results should be identical  
+            assert result1.bundle == result2.bundle
             assert code_path.read_bytes() == first_code
             
             # JSON content should be parseable and stable (excluding timestamp)
@@ -412,3 +412,56 @@ class TestRuntimeWithOrasExternal:
 
         finally:
             rt.resolve = original_resolve
+
+
+def test_resolve_digest_only_reference():
+    """Test resolve with digest-only reference."""
+    oras = FakeBundleRegistryStore()
+    external = FakeExternalStore()
+    
+    # Create a layer index with external entries
+    data_index = _layer_index_doc([
+        {
+            "path": "data/test.csv",
+            "external": {
+                "uri": "fake://container/test.csv",
+                "sha256": "fake-test-sha256",
+                "size": 1048576
+            }
+        }
+    ])
+    
+    # Store the layer index
+    data_index_digest = oras.put_manifest("application/vnd.modelops.layer+json", data_index)
+    
+    # Create bundle manifest
+    bundle_manifest = {
+        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+        "roles": {
+            "default": ["data"],
+            "training": ["data"]
+        },
+        "layers": ["data"],
+        "layer_indexes": {
+            "data": data_index_digest
+        },
+        "external_index_present": True
+    }
+    
+    # Store bundle manifest and get its digest
+    bundle_payload = json.dumps(bundle_manifest).encode()
+    bundle_digest = oras.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
+    
+    # Test resolve with digest-only reference
+    digest_ref = BundleRef(digest=bundle_digest)
+    resolved = resolve(digest_ref, registry=oras, repository="test/repo")
+    
+    # Verify the resolved bundle
+    assert resolved.ref.digest == bundle_digest
+    assert resolved.ref.name is None
+    assert resolved.ref.version is None
+    assert resolved.manifest_digest == bundle_digest
+    assert resolved.roles == {"default": ["data"], "training": ["data"]}
+    assert resolved.layers == ["data"]
+    assert resolved.external_index_present is True
+    assert resolved.total_size == 1048576  # Size from external entry

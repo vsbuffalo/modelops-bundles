@@ -115,7 +115,7 @@ def write_pointer_file(
     temp_path = pointer_path.parent / f"{pointer_path.name}.tmp.{os.getpid()}"
     
     try:
-        with open(temp_path, 'w', encoding='utf-8') as f:
+        with open(temp_path, 'w', encoding='utf-8', newline='\n') as f:
             # Use canonical JSON serialization for determinism
             json.dump(
                 pointer.model_dump(mode="json"),
@@ -153,7 +153,7 @@ def read_pointer_file(pointer_path: Path) -> PointerFile:
         FileNotFoundError: If file doesn't exist
         ValueError: If file is malformed
     """
-    with open(pointer_path, 'r', encoding='utf-8') as f:
+    with open(pointer_path, 'r', encoding='utf-8', newline='\n') as f:
         data = json.load(f)
     
     return PointerFile.model_validate(data)

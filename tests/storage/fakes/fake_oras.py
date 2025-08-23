@@ -10,7 +10,7 @@ import hashlib
 import re
 from typing import Dict
 
-from ..base import BundleRegistryStore
+from modelops_bundles.storage.base import BundleRegistryStore
 
 # Regex for validating SHA256 digests
 _DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")

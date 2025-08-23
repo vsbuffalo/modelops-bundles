@@ -66,7 +66,32 @@ class AzureExternalAdapter(ExternalStore):
             raise ValueError("Azure authentication not configured: need AZURE_STORAGE_CONNECTION_STRING or (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY)")
     
     def _get_blob_client(self, uri: str):
-        """Get Azure blob client for the given URI."""
+        """
+        Get Azure blob client for the given URI.
+        
+        Handles multiple connection patterns for Azure Blob Storage:
+        
+        1. Connection String + Production (AZURE_STORAGE_CONNECTION_STRING only):
+           - Uses BlobServiceClient.from_connection_string()
+           - Standard Azure cloud endpoints
+           - Example: DefaultEndpointsProtocol=https;AccountName=myacct;AccountKey=...
+        
+        2. Connection String + Custom Endpoint (+ AZURE_BLOB_ENDPOINT):
+           - Extracts account name from connection string
+           - Overrides endpoint for Azurite/private clouds
+           - Example: http://localhost:10000 for Azurite development
+        
+        3. Account+Key + Production (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY):
+           - Uses account URL: https://{account}.blob.core.windows.net
+           - Standard Azure cloud with explicit credentials
+        
+        4. Account+Key + Custom Endpoint (+ AZURE_BLOB_ENDPOINT):
+           - Uses custom endpoint: {endpoint}/{account}
+           - For private clouds or development environments
+        
+        All patterns include retry configuration (5 retries, 0.4s backoff) for resilience
+        against transient network issues and Azure throttling.
+        """
         try:
             from azure.storage.blob import BlobServiceClient
         except ImportError:
@@ -76,56 +101,65 @@ class AzureExternalAdapter(ExternalStore):
         if parsed.scheme != "az":
             raise ValueError(f"Expected az:// URI, got {parsed.scheme}://{parsed.container_or_bucket}/{parsed.key}")
         
-        # Create service client
+        # Create service client using one of four connection patterns
         if self._settings.az_connection_string:
-            # When using connection string with custom endpoint, we may need to override
+            # Pattern 1 & 2: Connection string-based authentication
             if self._settings.az_blob_endpoint:
-                # Extract account name from connection string for custom endpoint
-                # This supports Azurite and other custom endpoints
+                # Pattern 2: Connection string + custom endpoint (Azurite/private cloud)
                 import re
                 conn_str = self._settings.az_connection_string
                 account_match = re.search(r'AccountName=([^;]+)', conn_str)
                 if account_match:
                     account_name = account_match.group(1)
-                    # Build custom endpoint URL
+                    # Build custom endpoint URL: {endpoint}/{account}
                     endpoint_url = f"{self._settings.az_blob_endpoint.rstrip('/')}/{account_name}"
                     service_client = BlobServiceClient(
                         account_url=endpoint_url,
                         credential=None,  # Azurite typically doesn't need real credentials
-                        connection_timeout=self._settings.ext_timeout_s
+                        connection_timeout=self._settings.ext_timeout_s,
+                        retry_total=5,
+                        retry_backoff_factor=0.4
                     )
                 else:
-                    # Fallback to connection string if we can't parse it
+                    # Fallback: Can't extract account name, use connection string as-is
                     service_client = BlobServiceClient.from_connection_string(
                         self._settings.az_connection_string,
-                        connection_timeout=self._settings.ext_timeout_s
+                        connection_timeout=self._settings.ext_timeout_s,
+                        retry_total=5,
+                        retry_backoff_factor=0.4
                     )
             else:
-                # Standard connection string usage
+                # Pattern 1: Standard connection string (Azure cloud)
                 service_client = BlobServiceClient.from_connection_string(
                     self._settings.az_connection_string,
-                    connection_timeout=self._settings.ext_timeout_s
+                    connection_timeout=self._settings.ext_timeout_s,
+                    retry_total=5,
+                    retry_backoff_factor=0.4
                 )
         else:
-            # Use account + key with optional custom endpoint
+            # Pattern 3 & 4: Account name + key authentication
             if self._settings.az_blob_endpoint:
-                # Custom endpoint (e.g., Azurite, private cloud)
+                # Pattern 4: Account+key + custom endpoint
                 account_url = f"{self._settings.az_blob_endpoint.rstrip('/')}/{self._settings.az_account}"
                 service_client = BlobServiceClient(
                     account_url=account_url,
                     credential=self._settings.az_key,
-                    connection_timeout=self._settings.ext_timeout_s
+                    connection_timeout=self._settings.ext_timeout_s,
+                    retry_total=5,
+                    retry_backoff_factor=0.4
                 )
             else:
-                # Standard Azure cloud endpoint
+                # Pattern 3: Account+key + standard Azure cloud
                 account_url = f"https://{self._settings.az_account}.blob.core.windows.net"
                 service_client = BlobServiceClient(
                     account_url=account_url,
                     credential=self._settings.az_key,
-                    connection_timeout=self._settings.ext_timeout_s
+                    connection_timeout=self._settings.ext_timeout_s,
+                    retry_total=5,
+                    retry_backoff_factor=0.4
                 )
         
-        # Get blob client
+        # Get blob client for the specific container/blob
         blob_client = service_client.get_blob_client(
             container=parsed.container_or_bucket,
             blob=parsed.key

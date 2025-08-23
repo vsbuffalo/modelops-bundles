@@ -21,7 +21,7 @@ except ImportError:
     _RICH = False
     _console = None
 
-def print_resolved_bundle(bundle: ResolvedBundle) -> None:
+def print_resolved_bundle(bundle: ResolvedBundle, verbose: bool = False) -> None:
     """
     Print resolved bundle information in human-readable format.
     
@@ -29,6 +29,7 @@ def print_resolved_bundle(bundle: ResolvedBundle) -> None:
     
     Args:
         bundle: Resolved bundle to display
+        verbose: Show detailed information including media type decisions
     """
     # Format bundle label defensively
     label = (
@@ -41,6 +42,13 @@ def print_resolved_bundle(bundle: ResolvedBundle) -> None:
         _console.print(f"[bold]Bundle:[/] {label}")
         _console.print(f"[bold]Manifest:[/] [dim]{bundle.manifest_digest}[/]")
         _console.print(f"[bold]Size:[/] {_format_bytes(bundle.total_size)}")
+        
+        if verbose:
+            _console.print(f"[bold]Reference type:[/] {'digest-only' if bundle.ref.digest else 'name:version'}")
+            if bundle.external_index_present:
+                _console.print("[bold]External index:[/] present")
+            else:
+                _console.print("[bold]External index:[/] not present")
         
         if bundle.roles:
             table = Table(title="Roles")
@@ -60,6 +68,10 @@ def print_resolved_bundle(bundle: ResolvedBundle) -> None:
     typer.echo(f"Manifest: {bundle.manifest_digest}")
     typer.echo(f"Bundle: {label}")
     typer.echo(f"Size: {_format_bytes(bundle.total_size)}")
+    
+    if verbose:
+        typer.echo(f"Reference type: {'digest-only' if bundle.ref.digest else 'name:version'}")
+        typer.echo(f"External index: {'present' if bundle.external_index_present else 'not present'}")
     
     if bundle.roles:
         typer.echo("Roles:")
@@ -96,10 +108,16 @@ def print_materialize_summary(bundle: ResolvedBundle, dest: str, role: str) -> N
         if bundle.roles:
             available_roles = list(bundle.roles.keys())
             typer.echo(f"Available roles: {', '.join(available_roles)}")
+            # Show the first available role as the chosen one
+            first_role = available_roles[0]
+            typer.echo(f"Using first available role: {first_role}")
         else:
             typer.echo("No roles defined in bundle")
     else:
         typer.echo(f"Role '{role}' not found in bundle")
+        if bundle.roles:
+            available_roles = list(bundle.roles.keys())
+            typer.echo(f"Available roles: {', '.join(available_roles)}")
 
 def print_export_summary(src_dir: str, out_path: str, include_external: bool) -> None:
     """
@@ -180,8 +198,8 @@ def print_stub_message(command: str) -> None:
     Args:
         command: Command name that is stubbed
     """
-    typer.echo(f"[{command}] Command implemented as stub for Stage 5")
-    typer.echo("Full implementation available in later stages")
+    typer.echo(f"[{command}] Command implemented as stub")
+    typer.echo("Full implementation coming soon")
 
 def _format_bytes(size_bytes: int) -> str:
     """

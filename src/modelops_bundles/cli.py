@@ -1,5 +1,5 @@
 """
-ModelOps Bundles CLI - Minimal Typer interface for Stage 5.
+ModelOps Bundles CLI
 
 Implements 8 CLI verbs with Operations facade integration:
 - resolve: Resolve bundle identity without side effects
@@ -12,6 +12,7 @@ Implements 8 CLI verbs with Operations facade integration:
 """
 from __future__ import annotations
 
+import os
 import typer
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,7 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
     - "sha256:digest" -> BundleRef(digest)
     - "@sha256:digest" -> BundleRef(digest) [OCI format]
     - "/local/path" -> BundleRef(local_path)
+    - r"C:\\local\\path" -> BundleRef(local_path) [Windows]
     
     Args:
         ref_str: Bundle reference string
@@ -46,12 +48,16 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
     Raises:
         ValueError: If ref_str format is invalid
     """
+    ref_str = ref_str.strip()
     if ref_str.startswith("sha256:"):
-        return BundleRef(digest=ref_str)
+        # Normalize digest to lowercase for registry compatibility
+        normalized_digest = ref_str.lower()
+        return BundleRef(digest=normalized_digest)
     elif ref_str.startswith("@sha256:"):
-        # OCI digest format - strip the @ prefix
-        return BundleRef(digest=ref_str[1:])
-    elif ref_str.startswith("/") or ref_str.startswith("./") or ref_str.startswith("../"):
+        # OCI digest format - strip the @ prefix and normalize to lowercase
+        normalized_digest = ref_str[1:].lower()
+        return BundleRef(digest=normalized_digest)
+    elif ref_str.startswith("/") or ref_str.startswith("./") or ref_str.startswith("../") or ref_str.startswith(".\\") or ref_str.startswith("..\\") or os.path.isabs(ref_str):
         return BundleRef(local_path=ref_str)
     elif ":" in ref_str:
         parts = ref_str.split(":", 1)  # Split only on first ':'
@@ -76,10 +82,18 @@ def _create_provider(provider_name: Optional[str] = None) -> Optional[ContentPro
     if provider_name == "fake":
         # Import here to avoid dependency on test code
         try:
-            from .test.fake_provider import FakeProvider
+            from tests.fakes.fake_provider import FakeProvider
             return FakeProvider()
         except ImportError:
-            typer.echo("Warning: FakeProvider not available, using real provider")
+            # Try alternate path for tests run outside pytest
+            try:
+                import sys
+                import os
+                sys.path.insert(0, os.path.join(os.getcwd(), 'tests'))
+                from fakes.fake_provider import FakeProvider
+                return FakeProvider()
+            except ImportError:
+                typer.echo("Warning: FakeProvider not available, using real provider")
     
     # Use real provider for production
     return default_provider_from_env()
@@ -97,13 +111,23 @@ def _create_registry_store(provider_name: Optional[str] = None):
     if provider_name == "fake":
         # Import here to avoid dependency on test code
         try:
-            from .storage.fakes.fake_oras import FakeBundleRegistryStore
+            from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
             fake_store = FakeBundleRegistryStore()
             # Add some fake manifests for testing
             _add_fake_manifests(fake_store)
             return fake_store
-        except ImportError:
-            typer.echo("Warning: FakeBundleRegistryStore not available, using real store")
+        except ImportError as e1:
+            # Try alternate path for tests run outside pytest  
+            try:
+                import sys
+                import os
+                sys.path.insert(0, os.path.join(os.getcwd(), 'tests'))
+                from storage.fakes.fake_oras import FakeBundleRegistryStore
+                fake_store = FakeBundleRegistryStore()
+                _add_fake_manifests(fake_store)
+                return fake_store
+            except ImportError:
+                typer.echo("Warning: FakeBundleRegistryStore not available, using real store")
     
     # Use real ORAS adapter for production
     from .settings import load_settings_from_env
@@ -179,30 +203,41 @@ def _add_fake_manifests(fake_store):
     bundle_digest = fake_store.put_manifest("application/vnd.modelops.bundle.manifest+json", bundle_payload)
     
     # Tag manifest with references for testing using public API
-    fake_store.tag_manifest("test/repo/my/repo:1.2.3", bundle_digest)
+    fake_store.tag_manifest("test/repo/myrepo:1.2.3", bundle_digest)
     fake_store.tag_manifest("test/repo/bundle:v1.0.0", bundle_digest)  # For CLI smoke tests
 
 @app.command()
 def resolve(
     bundle_ref: str = typer.Argument(..., help="Bundle reference to resolve"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable bundle caching"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    provider: Optional[str] = typer.Option(None, "--provider", envvar="MODELOPS_PROVIDER", hidden=True, help="Provider override for testing"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show detailed output")
 ) -> None:
     """Resolve bundle identity without side effects."""
     
     def _resolve() -> None:
         ref = _parse_bundle_ref(bundle_ref)
-        config = OpsConfig(cache=not no_cache)
+        config = OpsConfig(cache=not no_cache, verbose=verbose)
         
         # Create registry and repository based on provider type
         if provider == "fake":
             registry = _create_registry_store(provider)
             ops = Operations(config=config, registry=registry, repository="test/repo")
         else:
-            ops = Operations(config=config)
+            # Production path - create registry and pass to Operations
+            from .settings import load_settings_from_env
+            from .storage.oras import OrasAdapter
+            
+            settings = load_settings_from_env()
+            registry = OrasAdapter(settings=settings)
+            ops = Operations(
+                config=config,
+                registry=registry,
+                repository=settings.registry_repo
+            )
         
         resolved = ops.resolve(ref)
-        print_resolved_bundle(resolved)
+        print_resolved_bundle(resolved, verbose=verbose)
     
     run_and_exit(_resolve)
 
@@ -215,13 +250,14 @@ def materialize(
     prefetch_external: bool = typer.Option(False, "--prefetch-external", help="Download external data immediately"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable bundle caching"),
     ci: bool = typer.Option(False, "--ci", help="CI mode (suppress progress)"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    provider: Optional[str] = typer.Option(None, "--provider", envvar="MODELOPS_PROVIDER", hidden=True, help="Provider override for testing"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show detailed output")
 ) -> None:
     """Materialize bundle layers to filesystem."""
     
     def _materialize() -> None:
         ref = _parse_bundle_ref(bundle_ref)
-        config = OpsConfig(cache=not no_cache, ci=ci)
+        config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
         content_provider = _create_provider(provider)
         
         # Create registry and repository based on provider type
@@ -229,9 +265,24 @@ def materialize(
             registry = _create_registry_store(provider)
             ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
         else:
-            ops = Operations(config=config, provider=content_provider)
+            # Production path - create full provider stack
+            from .settings import load_settings_from_env
+            from .storage.oras import OrasAdapter
+            from .storage.object_store import AzureExternalAdapter
+            from .providers.bundle_content import BundleContentProvider
+            
+            settings = load_settings_from_env()
+            registry = OrasAdapter(settings=settings)
+            external = AzureExternalAdapter(settings=settings)
+            content_provider = BundleContentProvider(registry=registry, external=external)
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=registry,
+                repository=settings.registry_repo
+            )
         
-        resolved = ops.materialize(
+        result = ops.materialize(
             ref=ref,
             dest=dest,
             role=role,
@@ -239,9 +290,7 @@ def materialize(
             prefetch_external=prefetch_external
         )
         
-        # Determine actual role that was materialized
-        actual_role = role or next(iter(resolved.roles.keys())) if resolved.roles else "unknown"
-        print_materialize_summary(resolved, dest, actual_role)
+        print_materialize_summary(result.bundle, result.dest_path, result.selected_role)
     
     run_and_exit(_materialize)
 
@@ -254,13 +303,14 @@ def pull(
     prefetch_external: bool = typer.Option(False, "--prefetch-external", help="Download external data immediately"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable bundle caching"),
     ci: bool = typer.Option(False, "--ci", help="CI mode (suppress progress)"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    provider: Optional[str] = typer.Option(None, "--provider", envvar="MODELOPS_PROVIDER", hidden=True, help="Provider override for testing"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show detailed output")
 ) -> None:
     """Pull bundle (alias for materialize)."""
     
     def _pull() -> None:
         ref = _parse_bundle_ref(bundle_ref)
-        config = OpsConfig(cache=not no_cache, ci=ci)
+        config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
         content_provider = _create_provider(provider)
         
         # Create registry and repository based on provider type
@@ -268,9 +318,24 @@ def pull(
             registry = _create_registry_store(provider)
             ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
         else:
-            ops = Operations(config=config, provider=content_provider)
+            # Production path - create full provider stack
+            from .settings import load_settings_from_env
+            from .storage.oras import OrasAdapter
+            from .storage.object_store import AzureExternalAdapter
+            from .providers.bundle_content import BundleContentProvider
+            
+            settings = load_settings_from_env()
+            registry = OrasAdapter(settings=settings)
+            external = AzureExternalAdapter(settings=settings)
+            content_provider = BundleContentProvider(registry=registry, external=external)
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=registry,
+                repository=settings.registry_repo
+            )
         
-        resolved = ops.pull(
+        result = ops.pull(
             ref=ref,
             dest=dest,
             role=role,
@@ -278,9 +343,7 @@ def pull(
             prefetch_external=prefetch_external
         )
         
-        # Determine actual role that was pulled
-        actual_role = role or next(iter(resolved.roles.keys())) if resolved.roles else "unknown"
-        print_materialize_summary(resolved, dest, actual_role)
+        print_materialize_summary(result.bundle, result.dest_path, result.selected_role)
     
     run_and_exit(_pull)
 
@@ -333,21 +396,15 @@ def export(
 
 @app.command()
 def scan(
-    working_dir: str = typer.Argument(".", help="Directory to scan"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    working_dir: str = typer.Argument(".", help="Directory to scan")
 ) -> None:
     """Scan working directory for bundle configuration."""
     
     def _scan() -> None:
         config = OpsConfig()
-        content_provider = _create_provider(provider)
-        
-        # Create registry and repository based on provider type
-        if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            ops = Operations(config=config, provider=content_provider)
+        # Provide minimal registry for stub operations 
+        registry = _create_registry_store("fake")
+        ops = Operations(config=config, registry=registry, repository="stub/repo")
         
         result = ops.scan(working_dir)
         print_stub_message("scan")
@@ -358,21 +415,15 @@ def scan(
 @app.command()
 def plan(
     working_dir: str = typer.Argument(".", help="Directory to analyze"),
-    external_preview: bool = typer.Option(False, "--external-preview", help="Preview external storage decisions"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    external_preview: bool = typer.Option(False, "--external-preview", help="Preview external storage decisions")
 ) -> None:
     """Show storage plan for bundle creation."""
     
     def _plan() -> None:
         config = OpsConfig()
-        content_provider = _create_provider(provider)
-        
-        # Create registry and repository based on provider type
-        if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            ops = Operations(config=config, provider=content_provider)
+        # Provide minimal registry for stub operations
+        registry = _create_registry_store("fake") 
+        ops = Operations(config=config, registry=registry, repository="stub/repo")
         
         result = ops.plan(working_dir, external_preview=external_preview)
         print_stub_message("plan")
@@ -382,21 +433,15 @@ def plan(
 
 @app.command()
 def diff(
-    ref_or_path: str = typer.Argument(..., help="Bundle reference or local path"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    ref_or_path: str = typer.Argument(..., help="Bundle reference or local path")
 ) -> None:
     """Compare bundle or working directory."""
     
     def _diff() -> None:
         config = OpsConfig()
-        content_provider = _create_provider(provider)
-        
-        # Create registry and repository based on provider type
-        if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            ops = Operations(config=config, provider=content_provider)
+        # Provide minimal registry for stub operations
+        registry = _create_registry_store("fake")
+        ops = Operations(config=config, registry=registry, repository="stub/repo")
         
         result = ops.diff(ref_or_path)
         print_stub_message("diff")
@@ -407,21 +452,15 @@ def diff(
 @app.command()
 def push(
     working_dir: str = typer.Argument(".", help="Directory containing bundle"),
-    bump: Optional[str] = typer.Option(None, "--bump", help="Version bump strategy (patch, minor, major)"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override for testing")
+    bump: Optional[str] = typer.Option(None, "--bump", help="Version bump strategy (patch, minor, major)")
 ) -> None:
     """Push bundle to registry."""
     
     def _push() -> None:
         config = OpsConfig()
-        content_provider = _create_provider(provider)
-        
-        # Create registry and repository based on provider type
-        if provider == "fake":
-            registry = _create_registry_store(provider)
-            ops = Operations(config=config, provider=content_provider, registry=registry, repository="test/repo")
-        else:
-            ops = Operations(config=config, provider=content_provider)
+        # Provide minimal registry for stub operations
+        registry = _create_registry_store("fake")
+        ops = Operations(config=config, registry=registry, repository="stub/repo")
         
         result = ops.push(working_dir, bump=bump)
         print_stub_message("push")

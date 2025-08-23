@@ -15,7 +15,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize, WorkdirConflict
 from modelops_bundles.runtime_types import MatEntry
 from modelops_bundles.runtime_types import ContentProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
 class TestPrefetchIntegrity:

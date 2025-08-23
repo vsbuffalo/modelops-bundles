@@ -21,8 +21,8 @@ from modelops_bundles.runtime import (
     _select_role,
     _validate_role
 )
-from .fake_provider import FakeProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.fakes.fake_provider import FakeProvider
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
 @pytest.fixture
@@ -242,7 +242,7 @@ def test_resolve_different_ref_types(mock_registry_and_repo):
     
     # Local path - should raise error for unsupported feature
     ref3 = BundleRef(local_path="/tmp/test")
-    with pytest.raises(ValueError, match="Local path support not implemented"):
+    with pytest.raises(ValueError, match="Local path support not yet implemented"):
         resolve(ref3, registry=registry, repository=repository)
     
     # Name+version and digest should return same bundle
@@ -267,9 +267,10 @@ def test_materialize_creates_files_and_pointers(tmp_path, mock_registry_and_repo
     
     result = materialize(ref, dest, role="training", provider=provider, registry=registry, repository=repository)
     
-    # Should return same type as resolve()
-    assert result.ref == ref
-    assert result.manifest_digest.startswith("sha256:")
+    # Should return MaterializeResult with bundle and selected role
+    assert result.bundle.ref == ref
+    assert result.bundle.manifest_digest.startswith("sha256:")
+    assert result.selected_role == "training"
     
     # Check that destination directory was created
     dest_path = Path(dest)
@@ -309,7 +310,8 @@ def test_materialize_idempotent(tmp_path, mock_registry_and_repo):
     result2 = materialize(ref, dest, role="runtime", provider=provider, registry=registry, repository=repository)
     
     # Results should be identical
-    assert result1.manifest_digest == result2.manifest_digest
+    assert result1.bundle.manifest_digest == result2.bundle.manifest_digest
+    assert result1.selected_role == result2.selected_role == "runtime"
 
 
 def test_materialize_conflict_no_overwrite(tmp_path, mock_registry_and_repo):
@@ -352,7 +354,7 @@ def test_materialize_conflict_with_overwrite(tmp_path, mock_registry_and_repo):
     
     # Should succeed with overwrite=True
     result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider, registry=registry, repository=repository)
-    assert result.manifest_digest.startswith("sha256:")
+    assert result.bundle.manifest_digest.startswith("sha256:")
     
     # File should be replaced (if it was materialized)
     if conflicting_file.exists():
@@ -541,7 +543,7 @@ def test_materialize_dir_vs_file_conflict(tmp_path, mock_registry_and_repo):
     
     # Should replace when overwrite=True
     result = materialize(ref, dest, role="runtime", overwrite=True, provider=provider, registry=registry, repository=repository)
-    assert result.manifest_digest.startswith("sha256:")
+    assert result.bundle.manifest_digest.startswith("sha256:")
     
     # Directory should be gone, file should exist
     file_path = dest_path / "src" / "model.py"
@@ -609,11 +611,11 @@ def test_resolve_then_materialize_integration(tmp_path, mock_registry_and_repo):
     
     # Then materialize using the same ref
     dest = str(tmp_path / "integration")
-    materialized = materialize(ref, dest, role="default", provider=provider, registry=registry, repository=repository)
+    materialized_result = materialize(ref, dest, role="default", provider=provider, registry=registry, repository=repository)
     
     # Results should have same digest (same bundle)
-    assert resolved.manifest_digest == materialized.manifest_digest
-    assert resolved.roles == materialized.roles
+    assert resolved.manifest_digest == materialized_result.bundle.manifest_digest
+    assert resolved.roles == materialized_result.bundle.roles
 
 
 def test_different_roles_materialize_different_content(tmp_path, mock_registry_and_repo):

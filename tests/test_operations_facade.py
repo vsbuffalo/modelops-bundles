@@ -14,8 +14,9 @@ import pytest
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from modelops_bundles.operations import Operations, OpsConfig
-from modelops_bundles.test.fake_provider import FakeProvider
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+from modelops_bundles.runtime import MaterializeResult
+from tests.fakes.fake_provider import FakeProvider
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
 
 
 class TestOperationsFacade:
@@ -83,7 +84,9 @@ class TestOperationsFacade:
         ref = BundleRef(name="test/bundle", version="v1.0.0")
         
         with patch('modelops_bundles.operations.facade._materialize') as mock_materialize:
-            mock_materialize.return_value = Mock(spec=ResolvedBundle)
+            mock_resolved = Mock(spec=ResolvedBundle)
+            mock_result = MaterializeResult(bundle=mock_resolved, selected_role="runtime", dest_path="/tmp/dest")
+            mock_materialize.return_value = mock_result
             
             result = ops.materialize(
                 ref=ref,
@@ -103,7 +106,9 @@ class TestOperationsFacade:
                 registry=registry,
                 repository="test/repo"
             )
-            assert result is mock_materialize.return_value
+            assert result is mock_result
+            assert result.bundle is mock_resolved
+            assert result.selected_role == "runtime"
 
     def test_pull_is_alias_for_materialize(self):
         """Test pull method is correct alias for materialize."""
@@ -115,7 +120,9 @@ class TestOperationsFacade:
         ref = BundleRef(name="test/bundle", version="v1.0.0")
         
         with patch.object(ops, 'materialize') as mock_materialize:
-            mock_materialize.return_value = Mock(spec=ResolvedBundle)
+            mock_resolved = Mock(spec=ResolvedBundle)
+            mock_result = MaterializeResult(bundle=mock_resolved, selected_role="runtime", dest_path="/tmp/dest")
+            mock_materialize.return_value = mock_result
             
             result = ops.pull(
                 ref=ref,
@@ -132,7 +139,7 @@ class TestOperationsFacade:
                 overwrite=False,
                 prefetch_external=False
             )
-            assert result is mock_materialize.return_value
+            assert result is mock_result
 
     def test_export_delegates_to_export_module(self):
         """Test export method delegates to export module with config."""
@@ -202,7 +209,9 @@ class TestOperationsFacade:
         ref = BundleRef(name="test/bundle", version="v1.0.0")
         
         with patch('modelops_bundles.operations.facade._materialize') as mock_materialize:
-            mock_materialize.return_value = Mock(spec=ResolvedBundle)
+            mock_resolved = Mock(spec=ResolvedBundle)
+            mock_result = MaterializeResult(bundle=mock_resolved, selected_role="default", dest_path="/tmp/dest")
+            mock_materialize.return_value = mock_result
             
             ops.materialize(ref, "/tmp/dest")
             

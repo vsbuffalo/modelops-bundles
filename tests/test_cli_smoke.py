@@ -15,7 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from modelops_bundles.cli import app
-from modelops_bundles.test.fake_provider import FakeProvider
+from tests.fakes.fake_provider import FakeProvider
 
 
 class TestCLISmokeTests:
@@ -128,12 +128,11 @@ class TestCLISmokeTests:
         """Test scan command stub functionality."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
-                "scan", temp_dir,
-                "--provider", "fake"
+                "scan", temp_dir
             ])
             
             assert result.exit_code == 0
-            assert "[scan] Command implemented as stub for Stage 5" in result.stdout
+            assert "[scan] Command implemented as stub" in result.stdout
             assert f"Scanned {temp_dir} (stub)" in result.stdout
 
     def test_plan_command_stub(self):
@@ -141,23 +140,21 @@ class TestCLISmokeTests:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
                 "plan", temp_dir,
-                "--external-preview",
-                "--provider", "fake"
+                "--external-preview"
             ])
             
             assert result.exit_code == 0
-            assert "[plan] Command implemented as stub for Stage 5" in result.stdout
+            assert "[plan] Command implemented as stub" in result.stdout
             assert f"Storage plan for {temp_dir} with external preview (stub)" in result.stdout
 
     def test_diff_command_stub(self):
         """Test diff command stub functionality."""
         result = self.runner.invoke(app, [
-            "diff", "bundle:v1.0.0",
-            "--provider", "fake"
+            "diff", "bundle:v1.0.0"
         ])
         
         assert result.exit_code == 0
-        assert "[diff] Command implemented as stub for Stage 5" in result.stdout
+        assert "[diff] Command implemented as stub" in result.stdout
         assert "Diff for bundle:v1.0.0 (stub)" in result.stdout
 
     def test_push_command_stub(self):
@@ -165,12 +162,11 @@ class TestCLISmokeTests:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
                 "push", temp_dir,
-                "--bump", "minor",
-                "--provider", "fake"
+                "--bump", "minor"
             ])
             
             assert result.exit_code == 0
-            assert "[push] Command implemented as stub for Stage 5" in result.stdout
+            assert "[push] Command implemented as stub" in result.stdout
             assert f"Pushed {temp_dir} with minor bump (stub)" in result.stdout
 
     def test_invalid_bundle_ref_handling(self):
@@ -205,7 +201,7 @@ class TestCLISmokeTests:
     @patch('modelops_bundles.cli._create_registry_store')
     def test_provider_injection(self, mock_create_registry_store):
         """Test that registry store injection works correctly."""
-        from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+        from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
         from modelops_bundles.cli import _add_fake_manifests
         
         mock_registry = FakeBundleRegistryStore()
@@ -223,18 +219,18 @@ class TestCLISmokeTests:
         """Test commands with default arguments."""
         # scan defaults to current directory
         result = self.runner.invoke(app, [
-            "scan", "--provider", "fake"
+            "scan"
         ])
         assert result.exit_code == 0
         
         # plan defaults to current directory  
         result = self.runner.invoke(app, [
-            "plan", "--provider", "fake"
+            "plan"
         ])
         assert result.exit_code == 0
         
         # push defaults to current directory
         result = self.runner.invoke(app, [
-            "push", "--provider", "fake"
+            "push"
         ])
         assert result.exit_code == 0

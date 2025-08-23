@@ -14,7 +14,7 @@ from unittest.mock import patch
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize
 from modelops_bundles.runtime_types import ContentProvider, MatEntry
-from modelops_bundles.storage.fakes.fake_oras import FakeBundleRegistryStore
+from tests.storage.fakes.fake_oras import FakeBundleRegistryStore
 from collections.abc import Iterable
 
 
@@ -133,13 +133,13 @@ class TestProvenanceFile:
         # Verify layer indexes are present and match resolved bundle
         assert "layer_indexes" in provenance_data
         assert isinstance(provenance_data["layer_indexes"], dict)
-        assert provenance_data["layer_indexes"] == result.layer_indexes
+        assert provenance_data["layer_indexes"] == result.bundle.layer_indexes
         
         # Verify roles mapping
-        assert provenance_data["roles"] == result.roles
+        assert provenance_data["roles"] == result.bundle.roles
         
         # Verify manifest digest
-        assert provenance_data["manifest_digest"] == result.manifest_digest
+        assert provenance_data["manifest_digest"] == result.bundle.manifest_digest
         
         # Verify original ref is preserved
         assert "ref" in provenance_data

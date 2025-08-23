@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, List
+from dataclasses import dataclass
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
@@ -20,7 +21,20 @@ from .pointer_writer import write_pointer_file
 from .runtime_types import ContentProvider, MatEntry
 from .storage.base import BundleRegistryStore
 
-__all__ = ["resolve", "materialize", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
+__all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError"]
+
+
+@dataclass
+class MaterializeResult:
+    """
+    Result of bundle materialization with runtime context.
+    
+    Separates immutable bundle metadata from runtime materialization decisions
+    like role selection and destination path.
+    """
+    bundle: ResolvedBundle
+    selected_role: str  
+    dest_path: str
 
 
 
@@ -51,6 +65,15 @@ class BundleNotFoundError(Exception):
     Raised when a bundle cannot be found in registry or local path.
     
     This corresponds to exit code 1 in the CLI.
+    """
+    pass
+
+
+class UnsupportedMediaType(Exception):
+    """
+    Raised when manifest has unsupported media type.
+    
+    This corresponds to exit code 10 in the CLI.
     """
     pass
 
@@ -93,6 +116,8 @@ def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | 
     
     # Determine manifest reference from BundleRef
     if ref.digest:
+        # Normalize digest to lowercase (some registries reject uppercase hex)
+        ref = ref.model_copy(update={'digest': ref.digest.lower()})
         manifest_ref = ref.digest
     elif ref.name and ref.version:
         if "/" in ref.name:
@@ -100,10 +125,10 @@ def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | 
         if not repository:
             raise ValueError("repository required for name+version refs")
         # Compose OCI reference from registry repo + name:version
-        manifest_ref = f"{repository}/{ref.name}:{ref.version}"
+        manifest_ref = f"{repository.rstrip('/')}/{ref.name}:{ref.version}"
     elif ref.local_path:
         # Local path support (future feature)
-        raise ValueError("Local path support not implemented in Stage 6")
+        raise ValueError("Local path support not yet implemented")
     else:
         raise ValueError("Invalid BundleRef: no resolvable reference found")
     
@@ -123,7 +148,7 @@ def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | 
     from modelops_contracts.artifacts import BUNDLE_MANIFEST, LAYER_INDEX
     media_type = doc.get("mediaType")
     if media_type != BUNDLE_MANIFEST:
-        raise ValueError(f"Invalid manifest mediaType: expected {BUNDLE_MANIFEST}, got {media_type!r}")
+        raise UnsupportedMediaType(f"Invalid manifest mediaType: expected {BUNDLE_MANIFEST}, got {media_type!r}")
     
     # Parse manifest fields
     roles = doc.get("roles", {})
@@ -145,7 +170,7 @@ def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | 
             
             # Validate layer index media type
             if index_doc.get("mediaType") != LAYER_INDEX:
-                raise ValueError(f"Invalid LAYER_INDEX mediaType for layer '{layer}'")
+                raise UnsupportedMediaType(f"Invalid LAYER_INDEX mediaType for layer '{layer}': expected {LAYER_INDEX}, got {index_doc.get('mediaType')!r}")
             
             # Sum external entry sizes
             for entry in index_doc.get("entries", []):
@@ -153,7 +178,7 @@ def resolve(ref: BundleRef, *, registry: BundleRegistryStore, repository: str | 
                 if external and "size" in external:
                     total_size += int(external["size"])
                     
-        except (KeyError, json.JSONDecodeError, ValueError):
+        except (KeyError, json.JSONDecodeError, ValueError, UnsupportedMediaType):
             # Layer index not found or malformed - will surface during materialize
             # Don't fail resolve, just continue with partial size
             continue
@@ -183,7 +208,7 @@ def materialize(
     provider: ContentProvider,
     registry: BundleRegistryStore,
     repository: str | None = None,
-) -> ResolvedBundle:
+) -> MaterializeResult:
     """
     Mirror layers for the selected role into dest.
     
@@ -206,7 +231,7 @@ def materialize(
         repository: Repository namespace - required for name+version refs
         
     Returns:
-        ResolvedBundle (same as resolve() would return)
+        Tuple of (ResolvedBundle, selected_role) where selected_role is the role that was actually used
         
     Raises:
         RoleLayerMismatch: If role doesn't exist or references missing layers
@@ -280,7 +305,11 @@ def materialize(
     # Write provenance file with materialization metadata
     _write_provenance(dest_path, resolved, selected_role)
     
-    return resolved
+    return MaterializeResult(
+        bundle=resolved,
+        selected_role=selected_role,
+        dest_path=dest
+    )
 
 
 def _select_role(resolved: ResolvedBundle, ref: BundleRef, role_arg: str | None) -> str:
@@ -509,7 +538,7 @@ def _write_provenance(dest_path: Path, resolved: ResolvedBundle, role: str) -> N
     
     tmp = out.with_name(out.name + f".tmp.{os.getpid()}")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8", newline='\n') as f:
             json.dump(payload, f, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())

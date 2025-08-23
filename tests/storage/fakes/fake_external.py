@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 from typing import Dict, Optional
 
-from ..base import ExternalStore, ExternalStat
+from modelops_bundles.storage.base import ExternalStore, ExternalStat
 
 __all__ = ["FakeExternalStore"]
 
