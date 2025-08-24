@@ -120,17 +120,18 @@ class BundleContentProvider(ContentProvider):
                 if "layer" in entry and entry["layer"] != layer:
                     raise ValueError(f"entry layer mismatch in '{layer}': entry says '{entry['layer']}'")
                 
-                # Exactly one of digest or external
-                has_digest = "digest" in entry
-                has_external = "external" in entry
+                # Determine storage type - support both nested and flat formats
+                oras_node = entry.get("oras")
+                external_node = entry.get("external")
+                has_legacy_digest = "digest" in entry
                 
-                if has_digest and has_external:
-                    raise ValueError(f"entry must have exactly one of 'digest' or 'external' for path '{path}'")
-                elif not has_digest and not has_external:
-                    raise ValueError(f"entry must have exactly one of 'digest' or 'external' for path '{path}'")
+                # Validation: exactly one storage type
+                storage_types = [oras_node is not None, external_node is not None, has_legacy_digest]
+                if sum(storage_types) != 1:
+                    raise ValueError(f"entry must have exactly one of 'oras', 'external', or legacy 'digest' for path '{path}'")
                 
-                if has_external:
-                    ext = entry["external"]
+                if external_node:
+                    ext = external_node
                     # Validate required external fields
                     required_fields = ["uri", "sha256", "size"]
                     missing = [f for f in required_fields if f not in ext]
@@ -151,7 +152,30 @@ class BundleContentProvider(ContentProvider):
                         uri=ext["uri"],
                         tier=ext.get("tier")  # Optional
                     )
-                else:  # has_digest
+                elif oras_node:
+                    # Nested format from planner: {"oras": {"digest": ..., "size": ...}}
+                    digest = oras_node.get("digest")
+                    size = oras_node.get("size", 0)
+                    
+                    # Validate digest format
+                    if not digest or not isinstance(digest, str):
+                        raise ValueError(f"invalid digest in oras node for layer '{layer}' path '{path}': must be non-empty string")
+                    if not digest.startswith("sha256:") or len(digest) != 71:
+                        raise ValueError(f"invalid digest format in oras node for layer '{layer}' path '{path}': expected 'sha256:<64 hex chars>', got '{digest}'")
+                    hex_part = digest[7:]  # Remove "sha256:" prefix
+                    if not all(c in '0123456789abcdef' for c in hex_part):
+                        raise ValueError(f"invalid digest format in oras node for layer '{layer}' path '{path}': contains non-hex characters")
+                    
+                    yield MatEntry(
+                        path=path,
+                        layer=layer,
+                        kind="oras",
+                        size=size,
+                        digest=digest,
+                        sha256=hex_part  # Store bare hex for verification
+                    )
+                else:  # has_legacy_digest
+                    # Legacy flat format: {"digest": ...}
                     digest = entry["digest"]
                     
                     # Validate digest format

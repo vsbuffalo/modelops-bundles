@@ -2,6 +2,8 @@ Short take: your plan is solid, but the pasted test suite doesn’t match it yet
 
 # What must change in tests
 
+## 0) Syntax/merge noise
+- The blob you pasted has concatenated files and broken triple-quotes (e.g. `"""Tests for ModelOps Bundles."""""Root pytest configuration...`). Fix those file splits and quotes first or pytest won’t even collect.
 
 ## 1) CLI bundle-ref parsing (plan says: no bare digests)
 - **Remove/flip** tests that still accept bare digests:

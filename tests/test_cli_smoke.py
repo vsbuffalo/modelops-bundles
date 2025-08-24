@@ -166,8 +166,8 @@ class TestCLISmokeTests:
             ])
             
             assert result.exit_code == 0
-            assert "[push] Command implemented as stub" in result.stdout
-            assert f"Pushed {temp_dir} with minor bump (stub)" in result.stdout
+            assert "Successfully pushed bundle from" in result.stdout
+            assert "minor bump" in result.stdout and "(stub)" in result.stdout
 
     def test_invalid_bundle_ref_handling(self):
         """Test that invalid bundle references are handled gracefully."""

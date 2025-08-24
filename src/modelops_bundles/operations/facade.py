@@ -153,9 +153,10 @@ class Operations:
             MaterializeResult containing bundle, selected_role, and dest_path
             
         Raises:
-            AssertionError: If no provider configured for materialization
+            ValueError: If no provider configured for materialization
         """
-        assert self.provider is not None, "Provider required for materialize operations"
+        if self.provider is None:
+            raise ValueError("Provider required for materialize operations")
         
         return _materialize(
             ref=ref,
@@ -164,7 +165,8 @@ class Operations:
             overwrite=overwrite,
             prefetch_external=prefetch_external,
             provider=self.provider,
-            registry=self.registry
+            registry=self.registry,
+            settings=self.settings
         )
 
     def pull(self, ref: BundleRef, dest: str, *,

@@ -224,6 +224,7 @@ def materialize(
     prefetch_external: bool = False,
     provider: ContentProvider,
     registry: 'OciRegistry' = None,
+    settings = None,
 ) -> MaterializeResult:
     """
     Mirror layers for the selected role into dest.
@@ -244,6 +245,7 @@ def materialize(
         prefetch_external: Whether to download external data immediately
         provider: ContentProvider to enumerate entries for materialization
         registry: Optional OCI registry (defaults to HybridOciRegistry)
+        settings: Optional settings (passed to resolve())
         
     Returns:
         MaterializeResult containing bundle, selected_role, and dest_path
@@ -254,7 +256,7 @@ def materialize(
         BundleNotFoundError: If bundle cannot be found
     """
     # First resolve the bundle to get metadata
-    resolved = resolve(ref, registry=registry)
+    resolved = resolve(ref, registry=registry, settings=settings)
     
     # Select role using precedence rules
     selected_role = _select_role(resolved, ref, role)
@@ -342,7 +344,7 @@ def materialize(
                     raise
         elif entry.kind == "external":
             # Handle external storage reference
-            # Always write pointer file
+            # Always write pointer file (fulfilled=False initially)
             write_pointer_file(
                 dest_dir=dest_path,
                 original_relpath=entry.path,
@@ -351,8 +353,8 @@ def materialize(
                 size=entry.size,
                 layer=entry.layer,
                 tier=entry.tier,
-                fulfilled=prefetch_external,
-                local_path=entry_path if prefetch_external else None
+                fulfilled=False,
+                local_path=None
             )
             
             # Optionally prefetch the actual content
@@ -384,6 +386,18 @@ def materialize(
                 try:
                     stream = provider.fetch_external(entry)
                     write_stream_atomically(target_path, stream, expected_sha=entry.sha256)
+                    # Success: mark pointer as fulfilled
+                    write_pointer_file(
+                        dest_dir=dest_path,
+                        original_relpath=entry.path,
+                        uri=entry.uri,
+                        sha256=entry.sha256,
+                        size=entry.size,
+                        layer=entry.layer,
+                        tier=entry.tier,
+                        fulfilled=True,
+                        local_path=entry_path
+                    )
                 except ValueError as e:
                     if "SHA mismatch" in str(e):
                         # Convert SHA mismatch to conflict

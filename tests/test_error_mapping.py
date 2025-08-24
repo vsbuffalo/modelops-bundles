@@ -55,7 +55,7 @@ class TestExitCodeMapping:
 
     def test_standard_exceptions_use_fallback(self):
         """Test that standard Python exceptions use fallback code."""
-        assert exit_code_for(ValueError("test")) == 3
+        assert exit_code_for(ValueError("test")) == 2  # ValueError maps to validation error
         assert exit_code_for(RuntimeError("test")) == 3
         assert exit_code_for(FileNotFoundError("test")) == 3
         assert exit_code_for(PermissionError("test")) == 3
@@ -73,7 +73,8 @@ class TestExitCodeMapping:
         """Test that all specified error types are mapped."""
         expected_errors = {
             "BundleNotFoundError",
-            "ValidationError", 
+            "ValidationError",
+            "ValueError",  # Added ValueError mapping
             "BundleDownloadError",
             "UnsupportedMediaType",
             "RoleLayerMismatch",

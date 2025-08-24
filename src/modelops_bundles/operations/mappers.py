@@ -14,7 +14,8 @@ T = TypeVar('T')
 # Exit code mapping per specification (§9)
 EXIT_CODES = {
     "BundleNotFoundError": 1,
-    "ValidationError": 2, 
+    "ValidationError": 2,
+    "ValueError": 2,  # Add ValueError mapping
     "BundleDownloadError": 3,
     "UnsupportedMediaType": 10,
     "RoleLayerMismatch": 11,
@@ -62,4 +63,8 @@ def run_and_exit(func: Callable[[], T]) -> T:
     try:
         return func()
     except Exception as e:
+        # Special handling for WorkdirConflict to show conflict details
+        if type(e).__name__ == "WorkdirConflict" and hasattr(e, 'conflicts'):
+            from .printers import print_conflicts
+            print_conflicts(e.conflicts)
         raise typer.Exit(code=exit_code_for(e)) from e

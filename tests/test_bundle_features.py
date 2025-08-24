@@ -175,6 +175,7 @@ class TestExitCodeMapping:
         expected_codes = {
             "BundleNotFoundError": 1,
             "ValidationError": 2,
+            "ValueError": 2,  # Added ValueError mapping
             "BundleDownloadError": 3,
             "UnsupportedMediaType": 10,
             "RoleLayerMismatch": 11,
@@ -255,7 +256,7 @@ class TestMediaTypeValidation:
         """Test that invalid bundle manifest media type raises UnsupportedMediaType."""
         registry = FakeOciRegistry()
         
-        def mock_get_manifest(ref):
+        def mock_get_manifest(repo, ref):
             # Return manifest with wrong media type
             manifest = {
                 "mediaType": "application/vnd.wrong.type+json",
@@ -267,6 +268,8 @@ class TestMediaTypeValidation:
             return json.dumps(manifest).encode()
         
         registry.get_manifest = mock_get_manifest
+        # Also need to mock head_manifest to return a digest
+        registry.head_manifest = lambda repo, ref: "sha256:1234567890123456789012345678901234567890123456789012345678901234"
         
         ref = BundleRef(name="test", version="1.0")
         
@@ -311,8 +314,8 @@ class TestTotalSizeCalculation:
         oras_index_payload = json.dumps(oras_only_index).encode()
         external_index_payload = json.dumps(external_index).encode()
         
-        oras_digest = registry.put_manifest("application/vnd.modelops.layer+json", oras_index_payload)
-        external_digest = registry.put_manifest("application/vnd.modelops.layer+json", external_index_payload)
+        oras_digest = registry.put_manifest("testns/bundles/test", "application/vnd.modelops.layer+json", oras_index_payload, "oras_index")
+        external_digest = registry.put_manifest("testns/bundles/test", "application/vnd.modelops.layer+json", external_index_payload, "external_index")
         
         def mock_get_manifest(ref):
             if ref.endswith("test:1.0"):

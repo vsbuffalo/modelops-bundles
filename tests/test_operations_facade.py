@@ -82,7 +82,7 @@ class TestOperationsFacade:
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
         
-        with pytest.raises(AssertionError, match="Provider required for materialize"):
+        with pytest.raises(ValueError, match="Provider required for materialize"):
             ops.materialize(ref, "/tmp/dest")
 
     def test_materialize_delegates_to_runtime(self):
@@ -115,6 +115,7 @@ class TestOperationsFacade:
                 prefetch_external=True,
                 provider=provider,
                 registry=registry,
+                settings=ops.settings
                             )
             assert result is mock_result
             assert result.bundle is mock_resolved

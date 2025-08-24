@@ -106,7 +106,7 @@ class TestRuntimeWithOrasExternal:
         # Mock resolve to return our resolved bundle
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True, settings=None: resolved
         
         try:
             # Materialize training role (includes data -> creates pointers)
@@ -178,7 +178,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True, settings=None: resolved
         
         try:
             dest = str(tmp_path / "runtime_workspace")
@@ -244,7 +244,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True, settings=None: resolved
         
         try:
             # Without overwrite -> should raise WorkdirConflict
@@ -325,7 +325,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True, settings=None: resolved
 
         try:
             dest = str(tmp_path / "deterministic_test")
@@ -401,7 +401,7 @@ class TestRuntimeWithOrasExternal:
 
         import modelops_bundles.runtime as rt
         original_resolve = rt.resolve
-        rt.resolve = lambda ref, registry=None, cache=True: resolved
+        rt.resolve = lambda ref, registry=None, cache=True, settings=None: resolved
         
         try:
             dest = str(tmp_path / "evil_workspace")

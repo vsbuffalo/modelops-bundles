@@ -231,7 +231,7 @@ class TestIterEntries:
         idx_digest = _put_layer_index_as_blob(oras, "testns/bundles/test-bundle", malformed_payload)
         resolved = _mk_resolved_with_indexes(idx_digest, None)
 
-        with pytest.raises(ValueError, match="entry must have exactly one of 'digest' or 'external' for path 'oops/no_source.txt'"):
+        with pytest.raises(ValueError, match="entry must have exactly one of 'oras', 'external', or legacy 'digest' for path 'oops/no_source.txt'"):
             list(provider.iter_entries(resolved, ["code"]))
 
     def test_entry_has_both_digest_and_external_raises(self):
@@ -251,7 +251,7 @@ class TestIterEntries:
         idx_digest = _put_layer_index_as_blob(oras, "testns/bundles/test-bundle", malformed_payload)
         resolved = _mk_resolved_with_indexes(idx_digest, None)
 
-        with pytest.raises(ValueError, match="entry must have exactly one of 'digest' or 'external' for path 'conflicted/file.txt'"):
+        with pytest.raises(ValueError, match="entry must have exactly one of 'oras', 'external', or legacy 'digest' for path 'conflicted/file.txt'"):
             list(provider.iter_entries(resolved, ["code"]))
 
     def test_missing_oras_blob_raises(self):
