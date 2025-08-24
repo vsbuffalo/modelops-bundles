@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Bundle
+metadata:
+  name: simple-test-bundle
+  version: 1.8.0
+  description: Simple test bundle for push command testing
+spec:
+  layers:
+  - name: code
+    type: code
+    files:
+    - src/**/*.py
+    - requirements.txt
+    ignore:
+    - '**/__pycache__/**'
+    - '**/*.pyc'
+  - name: config
+    type: config
+    files:
+    - config/*.yaml
+    - config/*.json
+  - name: data
+    type: data
+    files:
+    - data/*.csv
+    - data/*.parquet
+  roles:
+    inference:
+    - code
+    - config
+    training:
+    - code
+    - config
+    - data
+    default:
+    - code
+    - config
+  external_rules:
+  - pattern: data/*.parquet
+    uri_template: az://mybucket/bundles/{path}
+    tier: hot
+    size_threshold: 10485760
+  oras_size_limit: 104857600

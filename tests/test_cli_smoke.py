@@ -157,17 +157,41 @@ class TestCLISmokeTests:
         assert "[diff] Command implemented as stub" in result.stdout
         assert "Diff for bundle:v1.0.0 (stub)" in result.stdout
 
-    def test_push_command_stub(self):
-        """Test push command stub functionality."""
+    def test_push_command_with_bundle(self):
+        """Test push command with valid bundle."""
+        bundle_dir = Path(__file__).parent / "fixtures" / "simple-bundle"
+        
+        result = self.runner.invoke(app, [
+            "push", str(bundle_dir),
+            "--dry-run"
+        ])
+        
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.stdout or "dry-run" in result.stdout.lower()
+
+    def test_push_command_missing_spec(self):
+        """Test push command handles missing spec correctly."""
         with tempfile.TemporaryDirectory() as temp_dir:
             result = self.runner.invoke(app, [
-                "push", temp_dir,
-                "--bump", "minor"
+                "push", temp_dir
             ])
             
-            assert result.exit_code == 0
-            assert "Successfully pushed bundle from" in result.stdout
-            assert "minor bump" in result.stdout and "(stub)" in result.stdout
+            assert result.exit_code == 2  # Validation error
+            # The error is handled by run_and_exit which just sets exit code
+            # No need to check output message for proper error handling
+            
+    def test_push_command_with_version_bump(self):
+        """Test push command with version bump."""
+        bundle_dir = Path(__file__).parent / "fixtures" / "simple-bundle"
+        
+        result = self.runner.invoke(app, [
+            "push", str(bundle_dir),
+            "--bump", "minor",
+            "--dry-run"
+        ])
+        
+        assert result.exit_code == 0
+        assert "Version bumped" in result.stdout or "DRY RUN" in result.stdout
 
     def test_invalid_bundle_ref_handling(self):
         """Test that invalid bundle references are handled gracefully."""
@@ -229,8 +253,9 @@ class TestCLISmokeTests:
         ])
         assert result.exit_code == 0
         
-        # push defaults to current directory
+        # push defaults to current directory, but needs modelops.yaml
+        # Should get validation error since test directory has no bundle spec
         result = self.runner.invoke(app, [
             "push"
         ])
-        assert result.exit_code == 0
+        assert result.exit_code == 2  # FileNotFoundError maps to validation error

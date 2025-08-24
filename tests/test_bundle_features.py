@@ -172,6 +172,7 @@ class TestExitCodeMapping:
             "BundleNotFoundError": 1,
             "ValidationError": 2,
             "ValueError": 2,  # Added ValueError mapping
+            "FileNotFoundError": 2,  # Added FileNotFoundError mapping
             "BundleDownloadError": 3,
             "RoleLayerMismatch": 11,
             "WorkdirConflict": 12

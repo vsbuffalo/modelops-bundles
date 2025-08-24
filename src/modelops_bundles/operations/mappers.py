@@ -16,6 +16,7 @@ EXIT_CODES = {
     "BundleNotFoundError": 1,
     "ValidationError": 2,
     "ValueError": 2,  # Add ValueError mapping
+    "FileNotFoundError": 2,  # Missing modelops.yaml is a validation error
     "BundleDownloadError": 3,
     "RoleLayerMismatch": 11,
     "WorkdirConflict": 12,

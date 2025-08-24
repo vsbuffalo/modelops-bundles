@@ -4,7 +4,7 @@
 # testing, and Docker service management.
 
 .DEFAULT_GOAL := help
-.PHONY: help up down ps logs test-fast test-real test clean shell-azurite shell-registry
+.PHONY: help up down ps logs test-fast test-real test-round-trip test clean shell-azurite shell-registry
 
 help: ## Show this help message
 	@echo 'ModelOps Bundles Development Commands'
@@ -59,7 +59,12 @@ test-real: up ## Run real storage integration tests (requires Docker services)
 	@echo "   (This will start services automatically)"
 	@source dev/dev.env && bash dev/test-storage-real.sh
 
-test: test-fast test-real ## Run all test suites (fast + real)
+test-round-trip: up ## Run comprehensive push/pull round-trip tests (requires Docker services)
+	@echo "🔄 Running round-trip tests..."
+	@echo "   (This will start services automatically)"
+	@source dev/dev.env && bash dev/test-round-trip.sh
+
+test: test-fast test-real test-round-trip ## Run all test suites (fast + real + round-trip)
 	@echo "🎉 All test suites completed!"
 
 unit: ## Run Python unit tests
@@ -94,7 +99,7 @@ clean: down ## Clean up everything (stop services, remove volumes, temp files)
 	@echo "🧹 Cleaning up development environment..."
 	docker-compose -f dev/docker-compose.yml down -v
 	@echo "🗑️  Removing temporary test files..."
-	rm -rf /tmp/modelops-test-* /tmp/modelops-real-test-* 2>/dev/null || true
+	rm -rf /tmp/modelops-test-* /tmp/modelops-real-test-* /tmp/modelops-roundtrip-* 2>/dev/null || true
 	@echo "✅ Cleanup complete"
 
 reset: clean up ## Full reset: clean everything and restart services

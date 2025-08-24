@@ -73,7 +73,7 @@ class OrasBundleRegistry:
         return self._oras_client
     
     def push_bundle(self, 
-                   files: List[Dict[str, Any]], 
+                   files: List[str], 
                    repo: str,
                    tag: str,
                    manifest_annotations: Optional[Dict[str, str]] = None) -> str:
@@ -81,7 +81,7 @@ class OrasBundleRegistry:
         Push bundle files to registry using ORAS.
         
         Args:
-            files: List of file dicts with 'path' and optional 'annotations'
+            files: List of file paths to push
             repo: Repository path (e.g., "myorg/bundles/mybundle")
             tag: Tag for the bundle
             manifest_annotations: Annotations for the manifest
@@ -91,19 +91,26 @@ class OrasBundleRegistry:
         """
         target = f"{repo}:{tag}"
         
-        # ORAS push returns the manifest
-        result = self.oras.push(
+        # ORAS push returns a Response object
+        response = self.oras.push(
             files=files,
             target=target,
-            manifest_annotations=manifest_annotations or {}
+            manifest_annotations=manifest_annotations or {},
+            disable_path_validation=True
         )
         
-        # Extract digest from result
-        # ORAS typically returns manifest info we can use
-        if hasattr(result, 'digest'):
-            return result.digest
+        # Extract digest from response headers (OCI standard)
+        digest = response.headers.get('Docker-Content-Digest')
+        if digest:
+            return digest
         
-        # Fallback: compute digest from manifest
+        # Alternative: check for OCI-Subject header
+        digest = response.headers.get('OCI-Subject')
+        if digest:
+            return digest
+        
+        # Fallback: get manifest and compute digest
+        # Note: This requires an additional round-trip but is reliable
         manifest = self.get_manifest(repo, tag)
         return f"sha256:{hashlib.sha256(manifest).hexdigest()}"
     
@@ -118,11 +125,15 @@ class OrasBundleRegistry:
         Returns:
             Raw manifest bytes
         """
-        target = f"{repo}:{ref}" if ":" not in ref else f"{repo}@{ref}"
+        # Format target string correctly for ORAS
+        if ref.startswith("sha256:"):
+            target = f"{repo}@{ref}"  # Digest reference
+        else:
+            target = f"{repo}:{ref}"   # Tag reference
         
-        # Use ORAS to get manifest
-        # Note: We may need to adapt based on actual ORAS API
-        manifest = self.oras.remote.get_manifest(target)
+        # Use ORAS client directly (no .remote property)
+        # @ensure_container decorator will convert target string to Container
+        manifest = self.oras.get_manifest(target)
         
         if isinstance(manifest, dict):
             return json.dumps(manifest, separators=(',', ':'), sort_keys=True).encode()
@@ -139,20 +150,19 @@ class OrasBundleRegistry:
         Returns:
             Blob content bytes
         """
-        # ORAS handles blob fetching
-        # We may need to adapt based on actual ORAS blob API
-        target = f"{repo}@{digest}"
-        
-        # Pull to temp location
-        with tempfile.TemporaryDirectory() as tmpdir:
-            self.oras.pull(target=target, outdir=tmpdir)
-            # Read the blob from temp location
-            # This is simplified - actual implementation depends on ORAS API
-            files = list(Path(tmpdir).glob("*"))
-            if files:
-                return files[0].read_bytes()
-        
-        raise BundleDownloadError(f"Failed to fetch blob {digest}")
+        try:
+            # Format target for blob access - ORAS expects repo@digest
+            target = f"{repo}@{digest}"
+            
+            # Use authenticated ORAS client directly
+            # get_blob returns a Response object, we need .content
+            response = self.oras.get_blob(target, digest)
+            
+            # Extract bytes from response
+            return response.content
+            
+        except Exception as e:
+            raise BundleDownloadError(f"Failed to fetch blob {digest} from {repo}: {e}")
     
     def blob_exists(self, repo: str, digest: str) -> bool:
         """

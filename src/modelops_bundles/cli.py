@@ -175,8 +175,8 @@ def _add_fake_manifests_oras(fake_registry):
                 "path": "data/train.csv",
                 "external": {
                     "uri": "az://fake-container/train.csv",
-                    "sha256": "1234567890abcdef" * 8,  # 64 chars
-                    "size": 1024,
+                    "sha256": "e9f49fe13266597450605c421b38a8656e84216ff9c761ea1cd6720c563aeae8",
+                    "size": 42,
                     "tier": "hot"
                 }
             },
@@ -184,8 +184,8 @@ def _add_fake_manifests_oras(fake_registry):
                 "path": "data/test.csv", 
                 "external": {
                     "uri": "az://fake-container/test.csv",
-                    "sha256": "abcdef1234567890" * 8,  # 64 chars
-                    "size": 512,
+                    "sha256": "af26f456bb5bd8b1ec12187c7d5968040715d79a773f7f81c5945174e923ced4",
+                    "size": 26,
                     "tier": "cool"
                 }
             }
@@ -302,6 +302,12 @@ def materialize(
                 try:
                     from tests.storage.fakes.fake_external import FakeExternalStore
                     external = FakeExternalStore()
+                    
+                    # Seed fake external data
+                    train_data = b"fake,train,data\nrow1,val1,100\nrow2,val2,200"
+                    test_data = b"fake,test,data\nrow1,val1,50"
+                    external.put("az://fake-container/train.csv", train_data, sha256="e9f49fe13266597450605c421b38a8656e84216ff9c761ea1cd6720c563aeae8")
+                    external.put("az://fake-container/test.csv", test_data, sha256="af26f456bb5bd8b1ec12187c7d5968040715d79a773f7f81c5945174e923ced4")
                 except ImportError:
                     from .storage.object_store import AzureExternalAdapter
                     external = AzureExternalAdapter(settings=settings)
@@ -384,6 +390,12 @@ def pull(
                 try:
                     from tests.storage.fakes.fake_external import FakeExternalStore
                     external = FakeExternalStore()
+                    
+                    # Seed fake external data
+                    train_data = b"fake,train,data\nrow1,val1,100\nrow2,val2,200"
+                    test_data = b"fake,test,data\nrow1,val1,50"
+                    external.put("az://fake-container/train.csv", train_data, sha256="e9f49fe13266597450605c421b38a8656e84216ff9c761ea1cd6720c563aeae8")
+                    external.put("az://fake-container/test.csv", test_data, sha256="af26f456bb5bd8b1ec12187c7d5968040715d79a773f7f81c5945174e923ced4")
                 except ImportError:
                     from .storage.object_store import AzureExternalAdapter
                     external = AzureExternalAdapter(settings=settings)

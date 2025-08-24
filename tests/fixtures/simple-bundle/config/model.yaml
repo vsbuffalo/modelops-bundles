@@ -1,0 +1,15 @@
+model:
+  name: simple-model
+  version: "1.0"
+  type: regression
+  
+hyperparameters:
+  learning_rate: 0.001
+  batch_size: 32
+  epochs: 100
+
+data:
+  input_features:
+    - feature1
+    - feature2
+  target: target_value

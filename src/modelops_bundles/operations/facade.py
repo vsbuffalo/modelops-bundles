@@ -276,9 +276,63 @@ class Operations:
         Returns:
             Canonical manifest digest (sha256:...)
         """
-        # TODO: Implement real push functionality
-        stub_parts = [f"Pushed {working_dir}"]
+        # Handle version bumping if requested
         if bump:
-            stub_parts.append(f"with {bump} bump")
-        stub_parts.append("(stub)")
-        return " ".join(stub_parts)
+            from pathlib import Path
+            from ..planner import scan_directory
+            
+            # Load current spec to get version
+            spec = scan_directory(Path(working_dir))
+            current_version = spec.version
+            new_version = _apply_version_bump(current_version, bump)
+            
+            # Update version in spec file
+            _update_version_in_spec(Path(working_dir), new_version)
+            print(f"🔄 Version bumped: {current_version} -> {new_version}")
+        
+        # Delegate to publisher
+        from ..publisher import push_bundle
+        
+        return push_bundle(
+            working_dir=working_dir,
+            registry=self.registry,
+            settings=self.settings,
+            force=force,
+            dry_run=dry_run
+        )
+
+
+def _update_version_in_spec(working_dir: "Path", new_version: str) -> None:
+    """
+    Update version in modelops.yaml file.
+    
+    Args:
+        working_dir: Directory containing modelops.yaml
+        new_version: New version to set
+    """
+    import yaml
+    
+    # Find spec file
+    spec_files = ["modelops.yaml", "modelops.yml", ".mops-bundle.yaml", ".mops-bundle.yml"]
+    spec_path = None
+    
+    for filename in spec_files:
+        candidate = working_dir / filename
+        if candidate.exists():
+            spec_path = candidate
+            break
+    
+    if not spec_path:
+        raise FileNotFoundError("No bundle specification file found")
+    
+    # Load, update, and save
+    with open(spec_path, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    # Update version in metadata
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["version"] = new_version
+    
+    with open(spec_path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)

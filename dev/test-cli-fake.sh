@@ -69,7 +69,9 @@ test_cli_basic() {
     mkdir -p "$TEST_DIR/materialize-test"
     if $CLI_CMD materialize bundle:v1.0.0 "$TEST_DIR/materialize-test" --provider fake > "$TEST_DIR/materialize.out" 2>&1; then
         success "  Materialize command works"
-        [[ -f "$TEST_DIR/materialize-test/src/model.py" ]] || error "  Expected file not materialized"
+        # Check for fake registry content (files are organized by layers)
+        [[ -d "$TEST_DIR/materialize-test/code" ]] || error "  Code layer directory missing"
+        [[ -f "$TEST_DIR/materialize-test/code/file0.txt" ]] || error "  Code layer files not materialized"
         [[ -d "$TEST_DIR/materialize-test/.mops" ]] || error "  Provenance directory missing"
     else
         error "  Materialize command failed"

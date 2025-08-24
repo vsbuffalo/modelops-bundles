@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-__all__ = ["Settings", "load_settings_from_env"]
+__all__ = ["Settings", "create_settings_from_env"]
 
 
 @dataclass(frozen=True)

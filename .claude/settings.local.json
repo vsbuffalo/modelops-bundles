@@ -12,7 +12,11 @@
       "Bash(source:*)",
       "Bash(bash:*)",
       "Bash(/dev/null)",
-      "WebFetch(domain:oras-project.github.io)"
+      "WebFetch(domain:oras-project.github.io)",
+      "Bash(MOPS_REGISTRY_URL=http://localhost:5000 MOPS_REGISTRY_REPO=test/bundles MOPS_AZ_CONNECTION_STRING=\"DefaultEndpointsProtocol=https;AccountName=test;AccountKey=fake\" uv run mops push --dry-run .)",
+      "Bash(make test:*)",
+      "Bash(make ps:*)",
+      "Read(//private/tmp/**)"
     ],
     "deny": [],
     "ask": [],

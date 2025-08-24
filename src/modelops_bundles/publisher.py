@@ -151,10 +151,7 @@ def _push_with_oras(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
             json.dumps(bundle_manifest.model_dump(by_alias=True), 
                       sort_keys=True, separators=(',', ':'))
         )
-        files_to_push.append({
-            "path": str(bundle_path),
-            "annotations": {MODELOPS_TITLE_ANNOTATION: BUNDLE_MANIFEST_TITLE}
-        })
+        files_to_push.append(str(bundle_path))
         
         # 2. Write layer indexes with title annotations
         for layer_name, layer_index in layer_indexes.items():
@@ -164,21 +161,25 @@ def _push_with_oras(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
                 json.dumps(layer_index.model_dump(by_alias=True),
                           sort_keys=True, separators=(',', ':'))
             )
-            files_to_push.append({
-                "path": str(layer_path),
-                "annotations": {MODELOPS_TITLE_ANNOTATION: layer_title}
-            })
+            files_to_push.append(str(layer_path))
         
-        # 3. Add ORAS files from plan
+        # 3. Handle external files - upload to blob storage and create pointer files
+        external_files = plan.all_external_files
+        if external_files:
+            print(f"📤 Uploading {len(external_files)} external files...")
+            _upload_external_files(external_files, registry.settings)
+            
+            # Create pointer files for external files
+            _create_pointer_files(tmp_path, external_files, files_to_push)
+        
+        # 4. Add ORAS files from plan
         for layer_plan in plan.layer_plans.values():
             for file_entry in layer_plan.files:
                 storage_decision = layer_plan.storage_decisions[file_entry.artifact_path]
                 if storage_decision == StorageDecision.ORAS:  # Only include ORAS files
-                    files_to_push.append({
-                        "path": str(file_entry.src_path)
-                    })
+                    files_to_push.append(str(file_entry.src_path))
         
-        # 4. Push with ORAS using bundle annotations
+        # 5. Push with ORAS using bundle annotations
         manifest_annotations = {
             MODELOPS_BUNDLE_ANNOTATION: MODELOPS_BUNDLE_TYPE,
             "org.opencontainers.image.title": f"{plan.spec.name}:{plan.spec.version}",
@@ -192,12 +193,53 @@ def _push_with_oras(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
             manifest_annotations=manifest_annotations
         )
         
-        # 5. Print success message
+        # 6. Print success message
         print(f"✅ Pushed bundle {repo}:{tag}")
         print(f"   Manifest digest: {digest}")
         print(f"   Files: {len(files_to_push)} total")
         
         return digest
+
+
+def _show_dry_run_summary(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
+                         bundle_manifest: BundleManifest, repo: str, tag: str) -> str:
+    """
+    Show what would be pushed in a dry run.
+    
+    Args:
+        plan: Storage plan
+        layer_indexes: Layer indexes
+        bundle_manifest: Bundle manifest
+        repo: Repository name
+        tag: Tag
+        
+    Returns:
+        Summary message
+    """
+    oras_files = plan.all_oras_files
+    external_files = plan.all_external_files
+    
+    print(f"🔍 DRY RUN: Would push bundle {repo}:{tag}")
+    print(f"   Bundle: {bundle_manifest.name} v{bundle_manifest.version}")
+    print(f"   Layers: {len(layer_indexes)} ({', '.join(layer_indexes.keys())})")
+    print(f"   ORAS files: {len(oras_files)}")
+    print(f"   External files: {len(external_files)}")
+    
+    if oras_files:
+        print("   ORAS files:")
+        for file_entry in oras_files[:5]:  # Show first 5
+            print(f"     • {file_entry.artifact_path} ({file_entry.size} bytes)")
+        if len(oras_files) > 5:
+            print(f"     ... and {len(oras_files) - 5} more")
+    
+    if external_files:
+        print("   External files:")
+        for file_entry in external_files[:5]:  # Show first 5
+            print(f"     • {file_entry.artifact_path} ({file_entry.size} bytes)")
+        if len(external_files) > 5:
+            print(f"     ... and {len(external_files) - 5} more")
+    
+    return f"sha256:{'0' * 64}"  # Fake digest for dry run
 
 
 def _push_staged_bundle(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
@@ -554,6 +596,73 @@ def push_with_multiple_tags(working_dir: str | Path, repo: str, tags: List[str],
         Dict mapping tags to manifest digests
     """
     raise NotImplementedError("Multi-tag push not yet implemented")
+
+
+def _upload_external_files(external_files: List[FileEntry], settings: Settings) -> None:
+    """
+    Upload external files to blob storage.
+    
+    Args:
+        external_files: Files to upload to external storage
+        settings: Settings with Azure configuration
+    """
+    from .storage.azure_external_adapter import AzureExternalAdapter
+    
+    # Create external storage adapter
+    external_store = AzureExternalAdapter(settings=settings)
+    
+    for file_entry in external_files:
+        # Read file content
+        content = file_entry.src_path.read_bytes()
+        
+        # Extract URI from layer index entry metadata
+        # This should match the external rule URI template
+        uri = f"az://mybucket/bundles/{file_entry.artifact_path}"
+        
+        # Upload to external storage
+        print(f"   📤 {file_entry.artifact_path} -> {uri}")
+        external_store.put(uri, content)
+
+
+def _create_pointer_files(tmp_path: Path, external_files: List[FileEntry], 
+                         files_to_push: List[str]) -> None:
+    """
+    Create pointer files for external files and add to files_to_push.
+    
+    Args:
+        tmp_path: Temporary directory for pointer files
+        external_files: External files to create pointers for
+        files_to_push: List to append pointer files to
+    """
+    import json
+    
+    # Create .mops/ptr directory structure
+    ptr_dir = tmp_path / ".mops" / "ptr"
+    ptr_dir.mkdir(parents=True, exist_ok=True)
+    
+    for file_entry in external_files:
+        # Create pointer file path
+        ptr_file_path = ptr_dir / f"{file_entry.artifact_path}.json"
+        ptr_file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Create pointer content
+        pointer_data = {
+            "original_path": file_entry.artifact_path,
+            "uri": f"az://mybucket/bundles/{file_entry.artifact_path}",
+            "sha256": file_entry.sha256,
+            "size": file_entry.size,
+            "tier": "hot"
+        }
+        
+        # Write pointer file
+        ptr_file_path.write_text(
+            json.dumps(pointer_data, sort_keys=True, separators=(',', ':'))
+        )
+        
+        # Add to files to push
+        files_to_push.append(str(ptr_file_path))
+        
+        print(f"   📝 Created pointer: {ptr_file_path.relative_to(tmp_path)}")
 
 
 # TODO: Add change detection

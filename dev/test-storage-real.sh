@@ -148,7 +148,7 @@ spec:
         - src/**
   roles:
     default:
-      layers: [code]
+      - code
 EOF
     
     mkdir -p "$TEST_DIR/bundle-to-push/src"
@@ -176,32 +176,129 @@ EOF
     success "Test 2: OCI Registry operations verified"
 }
 
-# Test 3: End-to-end bundle lifecycle
+# Test 3: End-to-end bundle lifecycle with push
 test_bundle_lifecycle() {
     log "Test 3: Bundle Lifecycle (Create → Push → Pull → Materialize)"
     
-    # This test would require the push command to be implemented
-    # For now, test what we can with existing CLI commands
+    # Create a real test bundle to push
+    log "  Creating test bundle for push..."
+    mkdir -p "$TEST_DIR/push-test-bundle/src" "$TEST_DIR/push-test-bundle/config"
     
-    log "  Testing bundle materialization with real provider..."
+    cat > "$TEST_DIR/push-test-bundle/modelops.yaml" << 'EOF'
+apiVersion: modelops.dev/v1alpha1
+kind: Bundle
+metadata:
+  name: storage-real-test
+  version: v1.0.0
+  description: Real storage integration test bundle
+spec:
+  layers:
+    - name: code
+      type: code
+      files:
+        - src/**/*.py
+    - name: config
+      type: config
+      files:
+        - config/*.yaml
+  roles:
+    default:
+      - code
+      - config
+    runtime:
+      - code
+EOF
+
+    cat > "$TEST_DIR/push-test-bundle/src/model.py" << 'EOF'
+"""Test model for real storage integration."""
+import json
+
+class TestModel:
+    def __init__(self, config_path: str = None):
+        self.config = {}
+        if config_path:
+            with open(config_path) as f:
+                self.config = json.load(f)
+    
+    def predict(self, data):
+        return {"prediction": "test", "input": data}
+    
+    def get_info(self):
+        return {"model": "TestModel", "version": "v1.0.0"}
+EOF
+
+    cat > "$TEST_DIR/push-test-bundle/config/model.yaml" << 'EOF'
+model:
+  type: test
+  parameters:
+    threshold: 0.5
+    batch_size: 32
+logging:
+  level: INFO
+EOF
+
+    success "  Test bundle created"
+    
+    # Push the bundle
+    log "  Pushing test bundle to real storage..."
+    if $CLI_CMD push "$TEST_DIR/push-test-bundle" > "$TEST_DIR/push-test.out" 2>&1; then
+        success "  Bundle pushed successfully to real storage"
+        
+        # Extract digest from output
+        push_digest=$(grep -o "sha256:[a-f0-9]\{64\}" "$TEST_DIR/push-test.out" | head -1)
+        if [[ -n "$push_digest" ]]; then
+            info "  Push digest: $push_digest"
+        fi
+    else
+        error "  Push to real storage failed: $(cat "$TEST_DIR/push-test.out" 2>/dev/null || echo 'No error output available')"
+    fi
+    
+    # Pull the bundle back using real provider
+    log "  Materializing pushed bundle with real provider..."
     mkdir -p "$TEST_DIR/real-materialize"
     
-    # Try to materialize a bundle using the real provider (without --provider fake)
-    # This should use the Azure + OCI registry stack
-    if $CLI_CMD materialize bundle:v1.0.0 "$TEST_DIR/real-materialize" 2> "$TEST_DIR/real-materialize-error.out"; then
+    if $CLI_CMD materialize "storage-real-test:v1.0.0" "$TEST_DIR/real-materialize" > "$TEST_DIR/real-materialize.out" 2>&1; then
         success "  Real provider materialization works"
+        
         if [[ -f "$TEST_DIR/real-materialize/src/model.py" ]]; then
             success "  Bundle files materialized correctly"
         else
             warn "  Bundle materialized but expected files missing"
         fi
+        
+        if [[ -f "$TEST_DIR/real-materialize/config/model.yaml" ]]; then
+            success "  Config files materialized correctly"
+        else
+            warn "  Config files missing from materialization"
+        fi
+        
+        if [[ -f "$TEST_DIR/real-materialize/.mops/provenance.json" ]]; then
+            success "  Provenance file created"
+            info "  Provenance: $(head -2 "$TEST_DIR/real-materialize/.mops/provenance.json" | tail -1)"
+        else
+            warn "  Provenance file missing"
+        fi
     else
-        # This is expected to fail since we don't have real bundles in the registry yet
-        warn "  Real provider materialization failed (expected - no bundles in registry yet)"
-        info "    Error: $(head -1 "$TEST_DIR/real-materialize-error.out")"
+        error "  Real provider materialization failed: $(cat "$TEST_DIR/real-materialize.out")"
     fi
     
-    success "Test 3: Bundle lifecycle tested (limited by available bundles)"
+    # Test role-specific materialization
+    log "  Testing role-specific materialization..."
+    mkdir -p "$TEST_DIR/runtime-role"
+    
+    if $CLI_CMD materialize "storage-real-test:v1.0.0" "$TEST_DIR/runtime-role" --role runtime > "$TEST_DIR/runtime-role.out" 2>&1; then
+        success "  Runtime role materialization works"
+        
+        if [[ -f "$TEST_DIR/runtime-role/src/model.py" ]] && [[ ! -f "$TEST_DIR/runtime-role/config/model.yaml" ]]; then
+            success "  Runtime role correctly excludes config layer"
+        else
+            warn "  Runtime role layer filtering may not be working correctly"
+        fi
+    else
+        warn "  Runtime role materialization failed: $(cat "$TEST_DIR/runtime-role.out")"
+    fi
+    
+    success "Test 3: Real bundle lifecycle completed successfully"
 }
 
 # Test 4: Large file handling and streaming

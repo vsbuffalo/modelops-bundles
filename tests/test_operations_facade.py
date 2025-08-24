@@ -194,8 +194,11 @@ class TestOperationsFacade:
         assert "Storage plan for /work/dir (stub)" == ops.plan("/work/dir")
         assert "Storage plan for /work/dir with external preview (stub)" == ops.plan("/work/dir", external_preview=True)
         assert "Diff for bundle:v1.0.0 (stub)" == ops.diff("bundle:v1.0.0")
-        assert "Pushed /work/dir (stub)" == ops.push("/work/dir")
-        assert "Pushed /work/dir with patch bump (stub)" == ops.push("/work/dir", bump="patch")
+        
+        # Push is no longer a stub - it's fully implemented
+        # Test that it raises appropriate error for missing directory
+        with pytest.raises(FileNotFoundError):
+            ops.push("/work/dir")
 
     def test_config_policies_are_applied(self):
         """Test that configuration policies are consistently applied."""
