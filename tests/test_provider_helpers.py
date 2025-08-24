@@ -29,7 +29,7 @@ class TestDefaultProviderFromEnv:
         
         # Mock the adapter imports to avoid dependency issues
         with patch.dict(os.environ, env, clear=True):
-            with patch('modelops_bundles.storage.oras.OrasAdapter') as mock_oras:
+            with patch('modelops_bundles.storage.registry_factory.make_registry') as mock_registry:
                 with patch('modelops_bundles.storage.object_store.AzureExternalAdapter') as mock_azure:
                     
                     provider = default_provider_from_env()
@@ -38,15 +38,15 @@ class TestDefaultProviderFromEnv:
                     assert isinstance(provider, BundleContentProvider)
                     
                     # Should have created both adapters
-                    mock_oras.assert_called_once()
+                    mock_registry.assert_called_once()
                     mock_azure.assert_called_once()
                     
                     # Adapters should receive settings
-                    oras_call_args = mock_oras.call_args
+                    registry_call_args = mock_registry.call_args
                     azure_call_args = mock_azure.call_args
                     
-                    assert 'settings' in oras_call_args.kwargs
                     assert 'settings' in azure_call_args.kwargs
+                    assert len(registry_call_args.args) == 1  # make_registry takes settings as first arg
     
     def test_raises_on_missing_registry_config(self):
         """Test that factory raises when registry config missing."""
@@ -69,6 +69,6 @@ class TestDefaultProviderFromEnv:
         reset_settings_cache()
         
         with patch.dict(os.environ, env, clear=True):
-            with patch('modelops_bundles.storage.oras.OrasAdapter'):
+            with patch('modelops_bundles.storage.registry_factory.make_registry'):
                 with pytest.raises(ValueError, match="Azure authentication not configured"):
                     default_provider_from_env()

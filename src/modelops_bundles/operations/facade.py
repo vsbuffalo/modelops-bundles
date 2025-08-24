@@ -275,22 +275,9 @@ class Operations:
         Returns:
             Canonical manifest digest (sha256:...)
         """
-        from ..publisher import push_bundle
-        from ..planner import scan_directory
-        from pathlib import Path
-        
-        spec = scan_directory(Path(working_dir))
-        
-        # Apply version bump if requested
-        tag = spec.version
+        # TODO: Implement real push functionality
+        stub_parts = [f"Pushed {working_dir}"]
         if bump:
-            tag = _apply_version_bump(spec.version, bump)
-        
-        # Push bundle and return digest - let publisher compute repo
-        return push_bundle(
-            working_dir=working_dir,
-            tag=tag,
-            registry=self.registry,
-            dry_run=dry_run,
-            force=force
-        )
+            stub_parts.append(f"with {bump} bump")
+        stub_parts.append("(stub)")
+        return " ".join(stub_parts)

@@ -10,15 +10,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List
 from dataclasses import dataclass
+from io import BytesIO
 
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from .path_safety import safe_relpath
 from .pointer_writer import write_pointer_file
-from .runtime_types import ContentProvider, MatEntry
+from .runtime_types import ContentProvider, MatEntry, ByteStream
 # TYPE_CHECKING import to avoid circular imports  
 from typing import TYPE_CHECKING
 
@@ -26,6 +28,80 @@ if TYPE_CHECKING:
     from .storage.oci_registry import OciRegistry
 
 __all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError", "BundleDownloadError", "UnsupportedMediaType"]
+
+
+# Streaming I/O constants and utilities
+CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+
+def write_stream_atomically(target_path: Path, bytestream: ByteStream, *, expected_sha: str) -> None:
+    """
+    Stream content to file with atomic write and SHA256 verification.
+    
+    This function provides memory-efficient writing of large files by streaming
+    content in chunks while computing SHA256 hash for verification. The write
+    is atomic (temp file + rename) to prevent partial files on failure.
+    
+    Args:
+        target_path: Final path for the file
+        bytestream: Content stream (file-like with read() or iterable of bytes)
+        expected_sha: Expected SHA256 hash (64 hex chars, no prefix)
+        
+    Raises:
+        ValueError: If SHA256 verification fails
+        OSError: If file operations fail
+    """
+    # Ensure parent directory exists
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create temp file in same directory for atomic rename
+    temp_dir = target_path.parent
+    hash_obj = hashlib.sha256()
+    
+    # Create temporary file
+    fd, temp_path = tempfile.mkstemp(prefix=".mops.tmp.", dir=temp_dir)
+    temp_path = Path(temp_path)
+    
+    try:
+        with os.fdopen(fd, "wb", buffering=0) as out:
+            # Handle file-like objects with read()
+            if hasattr(bytestream, "read"):
+                while True:
+                    chunk = bytestream.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    hash_obj.update(chunk)
+                    out.write(chunk)
+            else:
+                # Handle iterables of bytes
+                for chunk in bytestream:
+                    hash_obj.update(chunk)
+                    out.write(chunk)
+            
+            # Ensure data is written to disk
+            out.flush()
+            os.fsync(out.fileno())
+        
+        # Verify SHA256
+        actual_sha = hash_obj.hexdigest()
+        if actual_sha != expected_sha:
+            temp_path.unlink()  # Clean up temp file
+            raise ValueError(f"SHA mismatch for {target_path}: expected {expected_sha}, got {actual_sha}")
+        
+        # Atomic rename to final location
+        # Handle case where target is a directory (need to remove it first)
+        if target_path.exists() and target_path.is_dir():
+            import shutil
+            shutil.rmtree(target_path)
+        os.replace(temp_path, target_path)
+        
+    except Exception:
+        # Clean up temp file on any error
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 @dataclass(frozen=True)
@@ -220,19 +296,107 @@ def materialize(
         target_path = dest_path / entry_path
         
         if entry.kind == "oras":
-            # Handle ORAS content
-            # MatEntry validation ensures content is present for ORAS entries
-            assert entry.content is not None
-            _materialize_oras_file(
-                target_path, entry.content, overwrite, conflicts, dest_path
-            )
+            # Handle ORAS content with streaming
+            # Check for conflicts before fetching content to avoid unnecessary network I/O
+            if target_path.exists() and not overwrite:
+                # Check if existing content matches expected SHA256
+                try:
+                    existing_content = target_path.read_bytes()
+                    existing_hash = hashlib.sha256(existing_content).hexdigest()
+                    if existing_hash != entry.sha256:
+                        conflicts.append({
+                            "path": entry_path,
+                            "expected_sha256": entry.sha256,
+                            "actual_sha256": existing_hash
+                        })
+                        continue  # Skip to next entry
+                    else:
+                        # Content matches, no need to rewrite
+                        continue
+                except Exception:
+                    # If we can't read existing file, treat as conflict
+                    conflicts.append({
+                        "path": entry_path,
+                        "expected_sha256": entry.sha256,
+                        "actual_sha256": "unreadable"
+                    })
+                    continue
+            
+            # Fetch content stream and write with verification
+            try:
+                stream = provider.fetch_oras(entry)
+                write_stream_atomically(target_path, stream, expected_sha=entry.sha256)
+            except ValueError as e:
+                if "SHA mismatch" in str(e):
+                    # Convert SHA mismatch to conflict
+                    # Extract actual SHA from error message
+                    import re
+                    match = re.search(r"got ([a-f0-9]{64})", str(e))
+                    actual_sha = match.group(1) if match else "invalid"
+                    conflicts.append({
+                        "path": entry_path,
+                        "expected_sha256": entry.sha256,
+                        "actual_sha256": actual_sha
+                    })
+                else:
+                    raise
         elif entry.kind == "external":
-            # Handle external storage reference using metadata from provider  
-            # MatEntry validation ensures uri, sha256, size are present for external entries
-            _materialize_external_file(
-                dest_path, entry, prefetch_external, provider,
-                overwrite=overwrite, conflicts=conflicts, base_dir=dest_path
+            # Handle external storage reference
+            # Always write pointer file
+            write_pointer_file(
+                dest_dir=dest_path,
+                original_relpath=entry.path,
+                uri=entry.uri,
+                sha256=entry.sha256,
+                size=entry.size,
+                layer=entry.layer,
+                tier=entry.tier,
+                fulfilled=prefetch_external,
+                local_path=entry_path if prefetch_external else None
             )
+            
+            # Optionally prefetch the actual content
+            if prefetch_external:
+                # Check for conflicts before fetching
+                if target_path.exists() and not overwrite:
+                    try:
+                        existing_content = target_path.read_bytes()
+                        existing_hash = hashlib.sha256(existing_content).hexdigest()
+                        if existing_hash != entry.sha256:
+                            conflicts.append({
+                                "path": entry_path,
+                                "expected_sha256": entry.sha256,
+                                "actual_sha256": existing_hash
+                            })
+                            continue
+                        else:
+                            # Content matches, no need to rewrite
+                            continue
+                    except Exception:
+                        conflicts.append({
+                            "path": entry_path,
+                            "expected_sha256": entry.sha256,
+                            "actual_sha256": "unreadable"
+                        })
+                        continue
+                
+                # Fetch external content stream and write
+                try:
+                    stream = provider.fetch_external(entry)
+                    write_stream_atomically(target_path, stream, expected_sha=entry.sha256)
+                except ValueError as e:
+                    if "SHA mismatch" in str(e):
+                        # Convert SHA mismatch to conflict
+                        import re
+                        match = re.search(r"got ([a-f0-9]{64})", str(e))
+                        actual_sha = match.group(1) if match else "invalid"
+                        conflicts.append({
+                            "path": entry_path,
+                            "expected_sha256": entry.sha256,
+                            "actual_sha256": actual_sha
+                        })
+                    else:
+                        raise
     
     # Check for conflicts
     if conflicts and not overwrite:
@@ -295,129 +459,7 @@ def _validate_role(resolved: ResolvedBundle, role: str) -> str:
     return role
 
 
-def _materialize_oras_file(
-    target_path: Path,
-    content: bytes,
-    overwrite: bool,
-    conflicts: List[Dict[str, str]],
-    base_dir: Path
-) -> None:
-    """
-    Materialize an ORAS file with conflict detection and atomic writes.
-    
-    Args:
-        target_path: Where to write the file
-        content: File content bytes
-        overwrite: Whether to overwrite conflicts
-        conflicts: List to append conflict info to (side-effects)
-        base_dir: Base directory for relative path computation
-    """
-    if not target_path.exists():
-        # File doesn't exist, create it
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_file_atomically(target_path, content)
-        return
-    
-    # Check if target is a directory when we expect a file
-    if target_path.is_dir():
-        if overwrite:
-            # Remove directory and create file
-            import shutil
-            shutil.rmtree(target_path)
-            _write_file_atomically(target_path, content)
-        else:
-            conflicts.append({
-                "path": str(target_path.relative_to(base_dir)),
-                "error": "expected file but found directory"
-            })
-        return
-    
-    # File exists, check if content matches
-    try:
-        existing_content = target_path.read_bytes()
-        existing_hash = hashlib.sha256(existing_content).hexdigest()
-        expected_hash = hashlib.sha256(content).hexdigest()
-        
-        if existing_hash == expected_hash:
-            return  # UNCHANGED - no action needed
-        
-        # Content differs - conflict!
-        if overwrite:
-            _write_file_atomically(target_path, content)
-        else:
-            conflicts.append({
-                "path": str(target_path.relative_to(base_dir)),
-                "expected_sha256": expected_hash,
-                "actual_sha256": existing_hash
-            })
-            
-    except Exception:
-        # If we can't read existing file, treat as conflict
-        if overwrite:
-            _write_file_atomically(target_path, content)
-        else:
-            conflicts.append({
-                "path": str(target_path.relative_to(base_dir)),
-                "expected_sha256": hashlib.sha256(content).hexdigest(),
-                "actual_sha256": "unreadable"
-            })
-
-
-def _materialize_external_file(
-    dest_path: Path,
-    entry: MatEntry,
-    prefetch_external: bool,
-    provider: ContentProvider,
-    *,
-    overwrite: bool,
-    conflicts: list[dict[str, str]],
-    base_dir: Path,
-) -> None:
-    """
-    Create pointer file for external storage reference.
-    
-    Args:
-        dest_path: Root destination directory
-        entry: MatEntry with external metadata (uri, sha256, size, tier)
-        prefetch_external: Whether to also download the actual data
-        provider: ContentProvider to fetch external content
-    """
-    # MatEntry validation ensures uri, sha256, size are non-None for external entries
-    assert entry.uri is not None
-    assert entry.sha256 is not None  
-    assert entry.size is not None
-    
-    # If prefetch_external=True, fetch and write actual content first
-    if prefetch_external:
-        actual_path = dest_path / safe_relpath(entry.path)
-        content = provider.fetch_external(entry)
-        
-        # Verify SHA256 integrity before writing
-        got = hashlib.sha256(content).hexdigest()
-        if got != entry.sha256:
-            conflicts.append({
-                "path": entry.path,
-                "expected_sha256": entry.sha256,
-                "actual_sha256": got
-            })
-            return
-        
-        # Use _materialize_oras_file for conflict detection and overwrite handling
-        _materialize_oras_file(actual_path, content, overwrite, conflicts, base_dir)
-    
-    # Write pointer file only after successful content write (if prefetching)
-    sanitized_path = safe_relpath(entry.path)
-    write_pointer_file(
-        dest_dir=dest_path,
-        original_relpath=entry.path,
-        uri=entry.uri,
-        sha256=entry.sha256,
-        size=entry.size,
-        layer=entry.layer,
-        tier=entry.tier,  # Pass through as-is - tier is optional hint only
-        fulfilled=prefetch_external,
-        local_path=sanitized_path if prefetch_external else None
-    )
+# Legacy helper functions removed - now using streaming I/O directly in materialize()
 
 
 def _write_file_atomically(target_path: Path, content: bytes) -> None:

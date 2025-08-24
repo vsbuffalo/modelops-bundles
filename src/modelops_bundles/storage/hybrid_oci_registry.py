@@ -10,6 +10,8 @@ import hashlib
 import logging
 from typing import BinaryIO, Union
 
+from modelops_bundles.storage.oci_registry import OciRegistry
+
 from ..settings import Settings
 from .oci_errors import OciAuthError, OciDigestMismatch, OciError, OciNotFound
 from .registry_http import RegistryHTTP
@@ -17,7 +19,7 @@ from .registry_http import RegistryHTTP
 logger = logging.getLogger(__name__)
 
 
-class HybridOciRegistry:
+class HybridOciRegistry(OciRegistry):
     """
     MVP OCI registry implementation using HTTP + SDK hybrid approach.
     

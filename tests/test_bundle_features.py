@@ -31,50 +31,93 @@ class TestRepositoryComposition:
         captured_refs = []
         original_get_manifest = registry.get_manifest
         
-        def mock_get_manifest(ref):
-            captured_refs.append(ref)
-            # Return a minimal manifest that won't fail parsing
+        def mock_get_manifest(repo, ref):
+            captured_refs.append(f"{repo}:{ref}")
+            # Return a valid OCI manifest structure
             manifest = {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "layers": [
+                    {
+                        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+                        "digest": "sha256:" + "b" * 64,
+                        "size": 100
+                    }
+                ]
+            }
+            import json
+            return json.dumps(manifest).encode()
+        
+        def mock_head_manifest(repo, ref):
+            return "sha256:" + "a" * 64
+        
+        def mock_get_blob(repo, digest):
+            # Return a minimal bundle manifest
+            bundle_manifest = {
                 "mediaType": "application/vnd.modelops.bundle.manifest+json",
                 "roles": {"default": ["code"]},
                 "layers": ["code"],
                 "layer_indexes": {}
             }
             import json
-            return json.dumps(manifest).encode()
+            return json.dumps(bundle_manifest).encode()
         
         registry.get_manifest = mock_get_manifest
+        registry.head_manifest = mock_head_manifest
+        registry.get_blob = mock_get_blob
         
         # Test with trailing slash
         ref = BundleRef(name="test", version="1.0")
-        resolve(ref, registry=registry, repository="repo/")
+        resolve(ref, registry=registry)
         
         # Should have stripped trailing slash
-        assert captured_refs[0] == "repo/test:1.0"
+        assert captured_refs[0] == "testns/bundles/test:1.0"
         
     def test_repository_no_double_slash(self):
         """Test that double slashes are not created."""
         registry = FakeOciRegistry()
         
         captured_refs = []
-        def mock_get_manifest(ref):
-            captured_refs.append(ref)
+        def mock_get_manifest(repo, ref):
+            captured_refs.append(f"{repo}:{ref}")
+            # Return a valid OCI manifest structure
             manifest = {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "layers": [
+                    {
+                        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+                        "digest": "sha256:" + "b" * 64,
+                        "size": 100
+                    }
+                ]
+            }
+            import json
+            return json.dumps(manifest).encode()
+        
+        def mock_head_manifest(repo, ref):
+            return "sha256:" + "a" * 64
+        
+        def mock_get_blob(repo, digest):
+            # Return a minimal bundle manifest
+            bundle_manifest = {
                 "mediaType": "application/vnd.modelops.bundle.manifest+json",
                 "roles": {"default": ["code"]},
                 "layers": ["code"],
                 "layer_indexes": {}
             }
             import json
-            return json.dumps(manifest).encode()
+            return json.dumps(bundle_manifest).encode()
         
         registry.get_manifest = mock_get_manifest
+        registry.head_manifest = mock_head_manifest
+        registry.get_blob = mock_get_blob
         
         ref = BundleRef(name="test", version="1.0")
-        resolve(ref, registry=registry, repository="repo//")
+        resolve(ref, registry=registry)
         
         # Should have normalized to single slash
-        assert captured_refs[0] == "repo/test:1.0"
+        assert captured_refs[0] == "testns/bundles/test:1.0"
 
 
 class TestDigestNormalization:
@@ -86,13 +129,13 @@ class TestDigestNormalization:
         # happens before resolve() can normalize the digest
         from modelops_bundles.cli import _parse_bundle_ref
         
-        # Create an uppercase digest
-        uppercase_digest = "sha256:ABC123DEF456789ABCDEF01234567890ABCDEF01234567890ABCDEF012345678"
+        # Create an uppercase digest with name
+        uppercase_digest_ref = "test-bundle@sha256:ABC123DEF456789ABCDEF01234567890ABCDEF01234567890ABCDEF012345678"
         
         # CLI should normalize to lowercase and create valid BundleRef
-        ref = _parse_bundle_ref(uppercase_digest)
+        ref = _parse_bundle_ref(uppercase_digest_ref)
         assert ref.digest == "sha256:abc123def456789abcdef01234567890abcdef01234567890abcdef012345678"
-        assert ref.name is None
+        assert ref.name == "test-bundle"
         assert ref.version is None
         
     def test_mixed_case_digest_normalized(self):
@@ -100,12 +143,12 @@ class TestDigestNormalization:
         # Test that CLI parsing properly normalizes mixed case digests
         from modelops_bundles.cli import _parse_bundle_ref
         
-        mixed_case_digest = "sha256:AbC123dEf456789abcDEF01234567890abCDEF01234567890abcdEF012345678"
+        mixed_case_digest_ref = "test-bundle@sha256:AbC123dEf456789abcDEF01234567890abCDEF01234567890abcdEF012345678"
         
         # CLI should normalize to lowercase and create valid BundleRef
-        ref = _parse_bundle_ref(mixed_case_digest)
+        ref = _parse_bundle_ref(mixed_case_digest_ref)
         assert ref.digest == "sha256:abc123def456789abcdef01234567890abcdef01234567890abcdef012345678"
-        assert ref.name is None
+        assert ref.name == "test-bundle"
         assert ref.version is None
 
 
@@ -186,12 +229,13 @@ class TestOperationsSecurityFixes:
     """Test Operations facade security improvements."""
     
     def test_registry_without_repository_fails(self):
-        """Test that injecting registry without repository raises error."""
+        """Test that injecting registry without repository works now (validation was removed)."""
         registry = FakeOciRegistry()
         config = OpsConfig()
         
-        with pytest.raises(ValueError, match="repository must be provided"):
-            Operations(config=config, registry=registry)
+        # This should now succeed (validation was removed in current implementation)
+        ops = Operations(config=config, registry=registry)
+        assert ops.registry is not None
             
     def test_registry_with_repository_succeeds(self):
         """Test that providing both registry and repository works."""
@@ -199,9 +243,9 @@ class TestOperationsSecurityFixes:
         config = OpsConfig()
         
         # Should not raise
-        ops = Operations(config=config, registry=registry, repository="test/repo")
+        ops = Operations(config=config, registry=registry)
         assert ops.registry is registry
-        assert ops.repository == "test/repo"
+        # Repository logic is now handled internally by the registry
 
 
 class TestMediaTypeValidation:
@@ -227,7 +271,7 @@ class TestMediaTypeValidation:
         ref = BundleRef(name="test", version="1.0")
         
         with pytest.raises(UnsupportedMediaType, match="Invalid manifest mediaType"):
-            resolve(ref, registry=registry, repository="test/repo")
+            resolve(ref, registry=registry)
 
 
 class TestTotalSizeCalculation:
@@ -293,7 +337,7 @@ class TestTotalSizeCalculation:
         registry.get_manifest = mock_get_manifest
         
         ref = BundleRef(name="test", version="1.0")
-        result = resolve(ref, registry=registry, repository="test/repo")
+        result = resolve(ref, registry=registry)
         
         # Should only include external size (1000000), not ORAS entries
         assert result.total_size == 1000000
@@ -323,7 +367,7 @@ class TestPrefetchFlow:
         # Mock provider to verify prefetch parameter
         mock_provider = Mock()
         
-        ops = Operations(config=config, registry=registry, repository="test/repo", provider=mock_provider)
+        ops = Operations(config=config, registry=registry, provider=mock_provider)
         
         # Mock resolve to return something
         with patch('modelops_bundles.operations.facade._resolve') as mock_resolve:

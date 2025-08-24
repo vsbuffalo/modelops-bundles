@@ -67,6 +67,9 @@ def _parse_bundle_ref(ref_str: str) -> BundleRef:
         return BundleRef(local_path=ref_str)
     elif ref_str.startswith("./") or ref_str.startswith("../") or ref_str.startswith(".\\") or ref_str.startswith("..\\"):
         return BundleRef(local_path=ref_str)
+    # Windows absolute paths like C:\path or C:/path
+    elif len(ref_str) >= 3 and ref_str[1] == ":" and ref_str[0].isalpha():
+        return BundleRef(local_path=ref_str)
     
     # name:version format
     elif ":" in ref_str:

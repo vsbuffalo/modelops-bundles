@@ -7,11 +7,12 @@ storage interfaces for registry and external storage operations.
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from typing import Iterable
 
 from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
-from ..runtime_types import ContentProvider, MatEntry
+from ..runtime_types import ContentProvider, MatEntry, ByteStream
 from ..storage.base import ExternalStore  
 from ..storage.oci_registry import OciRegistry
 from ..storage.repo_path import build_repo
@@ -30,7 +31,8 @@ def _short_digest(digest: str) -> str:
 
 class BundleContentProvider(ContentProvider):
     """
-    ContentProvider that uses storage interfaces for bundle registry and external operations.
+    A concrete class that implements ContentProvider that uses storage
+    interfaces for bundle registry and external operations.
     
     This provider accepts storage implementations via dependency injection,
     enabling testing with fakes and production use with real implementations.
@@ -50,6 +52,7 @@ class BundleContentProvider(ContentProvider):
         self._registry = registry
         self._external = external
         self._settings = settings
+        self._current_repo: str | None = None  # Track repo context for lazy fetching
     
     def iter_entries(
         self,
@@ -76,6 +79,9 @@ class BundleContentProvider(ContentProvider):
         if not resolved.ref.name:
             raise ValueError("ResolvedBundle must have ref.name for repo-aware operations")
         repo = build_repo(self._settings, resolved.ref.name)
+        
+        # Store repo context for lazy fetching
+        self._current_repo = repo
         
         for layer in layers:
             # 1. Check layer has index
@@ -131,14 +137,18 @@ class BundleContentProvider(ContentProvider):
                     if missing:
                         raise ValueError(f"external entry missing fields {missing} for path '{path}' in layer '{layer}'")
                     
+                    # Create digest from SHA256 for consistency with ORAS entries
+                    sha256_hex = ext["sha256"]
+                    digest = f"sha256:{sha256_hex}"
+                    
                     yield MatEntry(
                         path=path,
                         layer=layer,
                         kind="external",
-                        content=None,
-                        uri=ext["uri"],
-                        sha256=ext["sha256"],
                         size=ext["size"],
+                        digest=digest,
+                        sha256=sha256_hex,
+                        uri=ext["uri"],
                         tier=ext.get("tier")  # Optional
                     )
                 else:  # has_digest
@@ -153,36 +163,70 @@ class BundleContentProvider(ContentProvider):
                     if not all(c in '0123456789abcdef' for c in hex_part):
                         raise ValueError(f"invalid digest format for layer '{layer}' path '{path}': contains non-hex characters")
                     
-                    try:
-                        blob = self._registry.get_blob(repo, digest)
-                    except Exception:
-                        raise ValueError(f"missing blob {_short_digest(digest)} for layer '{layer}' path '{path}'")
+                    # Get size from entry, or estimate from digest (we don't fetch content here)
+                    size = entry.get("size", 0)  # Fallback to 0 if not provided
                     
                     yield MatEntry(
                         path=path,
                         layer=layer,
                         kind="oras",
-                        content=blob
+                        size=size,
+                        digest=digest,
+                        sha256=hex_part  # Store bare hex for verification
                     )
 
-    def fetch_external(self, entry: MatEntry) -> bytes:
+    def fetch_oras(self, entry: MatEntry) -> ByteStream:
         """
-        Fetch external content using the external store.
+        Open a streaming source for a registry blob (lazy).
         
-        This path is used when entries have external storage references.
+        Args:
+            entry: MatEntry with kind=="oras" containing digest
+            
+        Returns:
+            Streaming source for the blob content
+            
+        Raises:
+            ValueError: If entry is not an ORAS entry or missing context
+        """
+        if entry.kind != "oras":
+            raise ValueError(f"Expected ORAS entry, got {entry.kind}")
+        
+        if not entry.digest:
+            raise ValueError("ORAS entry missing digest")
+            
+        if self._current_repo is None:
+            raise ValueError("No repository context - call iter_entries() first")
+        
+        # Get blob content from registry
+        # Note: Current registry.get_blob() returns bytes, not stream
+        # We wrap in BytesIO to provide stream interface
+        blob_bytes = self._registry.get_blob(self._current_repo, entry.digest)
+        return BytesIO(blob_bytes)
+    
+    def fetch_external(self, entry: MatEntry) -> ByteStream:
+        """
+        Open a streaming source for an external storage object (lazy).
         
         Args:
             entry: MatEntry with external metadata
             
         Returns:
-            Content bytes from external storage
+            Streaming source for external content
             
         Raises:
             ValueError: If entry is missing required external metadata
         """
+        if entry.kind != "external":
+            raise ValueError(f"Expected external entry, got {entry.kind}")
+            
         if entry.uri is None:
-            raise ValueError("external entry missing uri")
-        return self._external.get(entry.uri)
+            raise ValueError("External entry missing uri")
+        
+        # Get content from external store
+        # Note: Current external.get() returns bytes, not stream
+        # We wrap in BytesIO to provide stream interface
+        content_bytes = self._external.get(entry.uri)
+        return BytesIO(content_bytes)
 
 
 def default_provider_from_env() -> BundleContentProvider:

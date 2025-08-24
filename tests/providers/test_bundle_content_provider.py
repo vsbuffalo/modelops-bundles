@@ -110,20 +110,23 @@ class TestIterEntries:
         # Check external entries
         ext_entries = [e for e in entries if e.kind == "external"]
         assert len(ext_entries) == 2
-        assert all(e.content is None for e in ext_entries)
         
         train_entry = next(e for e in ext_entries if "train" in e.path)
         assert train_entry.uri == "az://bucket/train.csv"
         assert train_entry.size == 9
         assert train_entry.tier == "cool"
+        assert train_entry.sha256 == train_sha
+        assert train_entry.digest == f"sha256:{train_sha}"
         
         # Check ORAS entries
         oras_entries = [e for e in entries if e.kind == "oras"]
         assert len(oras_entries) == 2
-        assert all(e.content is not None for e in oras_entries)
         
         model_entry = next(e for e in oras_entries if "model" in e.path)
-        assert model_entry.content == code_file_1
+        expected_sha = hashlib.sha256(code_file_1).hexdigest()
+        assert model_entry.sha256 == expected_sha
+        assert model_entry.digest == f"sha256:{expected_sha}"
+        assert model_entry.size == 0  # Size not provided in layer index, defaults to 0
 
     def test_missing_layer_index_raises(self):
         """Test that missing layer in layer_indexes raises clear error."""
@@ -252,7 +255,7 @@ class TestIterEntries:
             list(provider.iter_entries(resolved, ["code"]))
 
     def test_missing_oras_blob_raises(self):
-        """Test that missing ORAS blob raises friendly error."""
+        """Test that missing ORAS blob raises friendly error during fetch."""
         oras = FakeOciRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
@@ -265,8 +268,14 @@ class TestIterEntries:
         idx_digest = _put_layer_index_as_blob(oras, "testns/bundles/test-bundle", idx_payload)
         resolved = _mk_resolved_with_indexes(idx_digest, None)
 
-        with pytest.raises(ValueError, match="missing blob sha256:fffffffffff\\.\\.\\. for layer 'code' path 'src/missing.py'"):
-            list(provider.iter_entries(resolved, ["code"]))
+        # iter_entries() should succeed (metadata only)
+        entries = list(provider.iter_entries(resolved, ["code"]))
+        assert len(entries) == 1
+        entry = entries[0]
+        
+        # But fetch_oras() should fail when content is actually needed
+        with pytest.raises(Exception):  # Will be raised by FakeOciRegistry when blob doesn't exist
+            provider.fetch_oras(entry)
 
     def test_external_entry_missing_required_fields_raises(self):
         """Test that external entry missing uri/sha256/size raises error."""
@@ -327,5 +336,5 @@ class TestIterEntries:
         idx_digest = _put_layer_index_as_blob(oras, "testns/bundles/test-bundle", payload)
         resolved = _mk_resolved_with_indexes(None, idx_digest)
         
-        with pytest.raises(ValueError, match="External sha256 must be 64 hex chars"):
+        with pytest.raises(ValueError, match="sha256 must be 64 hex chars"):
             list(provider.iter_entries(resolved, ["data"]))

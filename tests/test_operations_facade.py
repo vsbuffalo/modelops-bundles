@@ -47,7 +47,13 @@ class TestOperationsFacade:
             
             result = ops.resolve(ref)
             
-            mock_resolve.assert_called_once_with(ref, registry=registry, cache=True)
+            # Check that resolve was called with settings
+            mock_resolve.assert_called_once()
+            args, kwargs = mock_resolve.call_args
+            assert args[0] == ref
+            assert 'registry' in kwargs
+            assert 'settings' in kwargs
+            assert 'cache' in kwargs and kwargs['cache'] is True
             assert result is mock_resolve.return_value
 
     def test_resolve_respects_cache_config(self):
@@ -60,7 +66,13 @@ class TestOperationsFacade:
         
         with patch('modelops_bundles.operations.facade._resolve') as mock_resolve:
             ops.resolve(ref)
-            mock_resolve.assert_called_once_with(ref, registry=registry, cache=False)
+            # Check that resolve was called with settings
+            mock_resolve.assert_called_once()
+            args, kwargs = mock_resolve.call_args
+            assert args[0] == ref
+            assert 'registry' in kwargs
+            assert 'settings' in kwargs
+            assert 'cache' in kwargs and kwargs['cache'] is False
 
     def test_materialize_requires_provider(self):
         """Test materialize method requires provider to be configured."""
@@ -263,7 +275,13 @@ class TestOpsConfig:
         with patch('modelops_bundles.operations.facade._resolve') as mock_resolve:
             ref = BundleRef(name="test/bundle", version="v1.0.0")
             ops.resolve(ref)
-            mock_resolve.assert_called_once_with(ref, registry=registry, cache=False)
+            # Check that resolve was called with settings
+            mock_resolve.assert_called_once()
+            args, kwargs = mock_resolve.call_args
+            assert args[0] == ref
+            assert 'registry' in kwargs
+            assert 'settings' in kwargs
+            assert 'cache' in kwargs and kwargs['cache'] is False
         
         # Verify zstd level is passed through
         with patch('modelops_bundles.export.write_deterministic_archive') as mock_export:

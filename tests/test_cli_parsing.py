@@ -68,9 +68,9 @@ class TestBundleRefParsing:
     
     def test_complex_valid_names(self):
         """Test complex but valid bundle names."""
-        # Name with dots and underscores
-        ref = _parse_bundle_ref("foo.bar/baz_qux:1.2.3")
-        assert ref.name == "foo.bar/baz_qux"
+        # Name with hyphens and slashes (dots/underscores not allowed by BundleRef validation)
+        ref = _parse_bundle_ref("foo-bar/baz-qux:1.2.3")
+        assert ref.name == "foo-bar/baz-qux"
         assert ref.version == "1.2.3"
         
         # Name with multiple slashes
