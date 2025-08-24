@@ -36,8 +36,7 @@ from .storage.oci_media_types import (
     MODELOPS_BUNDLE_TYPE,
     MODELOPS_TITLE_ANNOTATION,
     BUNDLE_MANIFEST_TITLE,
-    LAYER_INDEX_TITLE_FORMAT,
-    APPLICATION_JSON
+    LAYER_INDEX_TITLE_FORMAT
 )
 from .runtime import BundleDownloadError
 

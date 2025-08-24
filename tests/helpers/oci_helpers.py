@@ -12,8 +12,7 @@ from modelops_bundles.storage.oci_media_types import (
     OCI_IMAGE_MANIFEST,
     OCI_EMPTY_CONFIG,
     OCI_EMPTY_CONFIG_DIGEST,
-    OCI_EMPTY_CONFIG_SIZE,
-    BUNDLE_MANIFEST
+    OCI_EMPTY_CONFIG_SIZE
 )
 
 
@@ -43,7 +42,7 @@ def create_oci_image_manifest(bundle_manifest_bytes: bytes) -> bytes:
         },
         "layers": [
             {
-                "mediaType": BUNDLE_MANIFEST,
+                "mediaType": "application/json",
                 "size": bundle_size,
                 "digest": bundle_digest
             }

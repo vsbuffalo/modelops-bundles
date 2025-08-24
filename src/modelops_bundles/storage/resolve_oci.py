@@ -15,7 +15,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from ..runtime import BundleNotFoundError
 from ..settings import Settings
-from .oci_media_types import BUNDLE_MANIFEST_TITLE, MODELOPS_TITLE_ANNOTATION, BUNDLE_MANIFEST
+from .oci_media_types import BUNDLE_MANIFEST_TITLE, MODELOPS_TITLE_ANNOTATION
 from .oras_bundle_registry import OrasBundleRegistry
 from .repo_path import build_repo
 
@@ -79,7 +79,7 @@ def resolve_oci(ref: BundleRef, registry: OrasBundleRegistry, settings: Settings
         if not bundle_descriptor:
             raise BundleNotFoundError(
                 f"No bundle manifest layer found in {repo}:{manifest_ref}. "
-                f"Expected layer with title annotation '{BUNDLE_MANIFEST_TITLE}' or media type '{BUNDLE_MANIFEST}'"
+                f"Expected layer with title annotation '{BUNDLE_MANIFEST_TITLE}' or media type 'application/json'"
             )
         
         # Step 4: Fetch and parse bundle manifest
@@ -160,7 +160,7 @@ def _find_bundle_manifest_descriptor(oci_manifest: dict) -> dict | None:
             return layer
         
         # Fall back to legacy media type detection
-        if layer.get("mediaType") == BUNDLE_MANIFEST:
+        if layer.get("mediaType") == "application/json":
             return layer
     
     # Check config blob (alternative location)
@@ -172,7 +172,7 @@ def _find_bundle_manifest_descriptor(oci_manifest: dict) -> dict | None:
             return config
         
         # Fall back to legacy media type detection
-        if config.get("mediaType") == BUNDLE_MANIFEST:
+        if config.get("mediaType") == "application/json":
             return config
     
     return None

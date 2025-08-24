@@ -168,7 +168,7 @@ This architecture enables efficient, role-aware bundle consumption while maintai
 
 ### 1.4 Component Architecture
 
-Here's how the components relate in our layered, protocol-based design:
+Here's how the components relate in our simplified, dependency-injected design:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -189,36 +189,38 @@ Here's how the components relate in our layered, protocol-based design:
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              BundleContentProvider                          │
-│                 (Hybrid Implementation)                     │
+│                 (Concrete Implementation)                   │
 │                                                             │
 │  Orchestrates both registry and external storage           │
 └───────┬─────────────────────────────────────────┬───────────┘
-        │ uses                                    │ uses
+        │ uses directly                           │ uses via protocol
         ▼                                         ▼
-┌────────────────┐                    ┌─────────────────────┐
-│ RegistryStore  │                    │ ExternalStore       │
-│ Protocol       │                    │ Protocol            │
-│                │                    │                     │
-│ • get_manifest │                    │ • get_object        │
-│ • put_manifest │                    │ • put_object        │
-│ • get_blob     │                    │ • object_exists     │
-│ • put_blob     │                    │ • list_objects      │
-│ • blob_exists  │                    │                     │
-└────────┬───────┘                    └─────────┬───────────┘
-         │ implements                           │ implements
-         ▼                                      ▼
-┌────────────────┐                    ┌─────────────────────┐
-│ OrasAdapter    │                    │ AzureExternalStore  │
-│ (Production)   │                    │ S3ExternalStore     │
-│                │                    │ GcsExternalStore    │
-└────────────────┘                    └─────────────────────┘
-         │                                      │
-         │ test doubles                         │ test doubles
-         ▼                                      ▼
-┌────────────────┐                    ┌─────────────────────┐
-│FakeRegistry    │                    │ FakeExternalStore   │
-│Store           │                    │                     │
-└────────────────┘                    └─────────────────────┘
+┌────────────────────┐                    ┌─────────────────────┐
+│ OrasBundleRegistry │                    │ ExternalStore       │
+│ (Direct Class)     │                    │ Protocol            │
+│                    │                    │                     │
+│ • get_manifest     │                    │ • stat              │
+│ • put_manifest     │                    │ • get               │
+│ • get_blob         │                    │ • put               │
+│ • put_blob         │                    │                     │
+└────────────────────┘                    └─────────┬───────────┘
+                                                     │ implements
+                                          ┌──────────┴──────────┐
+                                          │                     │
+                                ┌─────────▼──────┐   ┌──────────▼────────┐
+                                │AzureExternal   │   │FakeExternalStore  │
+                                │Adapter         │   │(Test Double)      │
+                                │                │   │                   │
+                                │S3External      │   │                   │
+                                │Adapter(Future) │   │                   │
+                                └────────────────┘   └───────────────────┘
+                                          │
+                                          │ test double
+                                          ▼
+                                ┌─────────────────────┐
+                                │FakeOrasBundleRegistry│
+                                │(Test Double)        │
+                                └─────────────────────┘
 ```
 
 ### 1.5 Key Design Decisions
@@ -230,12 +232,13 @@ Here's how the components relate in our layered, protocol-based design:
 
 **Registry-Native Approach:**
 - Not fighting the OCI spec - we embrace and extend it
-- Bundle manifests are standard OCI manifests with our media types
+- Bundle manifests are standard OCI manifests with standard JSON media types
 - Allows existing OCI tooling to work seamlessly with our artifacts
 
-**Protocol-First Design:**
-- Clean abstractions between layers (RegistryStore, ExternalStore, ContentProvider)
-- Enables testing with fakes and different storage backends
+**Selective Protocol Design:**
+- Direct implementation for OrasBundleRegistry (no protocol - only one backend)
+- Protocol abstraction for ExternalStore (multiple cloud providers)
+- ContentProvider protocol for clean materialize() dependency injection
 - Runtime layer stays pure and storage-agnostic
 
 **Separation of Identity and Realization:**
@@ -248,40 +251,90 @@ Here's how the components relate in our layered, protocol-based design:
 - Large, infrequently accessed data in blob storage (cheap, with lifecycle policies)
 - Pointer files bridge the gap with full integrity guarantees
 
+**Dependency Injection:**
+- CLIContext manages dependencies without global state
+- Fresh Settings instances eliminate test contamination
+- Clean separation between production and test implementations
+- Explicit dependency flow makes system easier to reason about
+
 This architecture gives us enterprise-grade bundle management built on proven infrastructure, letting us focus on ModelOps-specific features rather than reinventing storage systems.
+
+### 1.6 Dependency Injection Architecture
+
+We use dependency injection to eliminate global state and improve testability:
+
+**CLIContext Pattern:**
+```python
+@dataclass
+class CLIContext:
+    """Manages CLI-level dependencies without global state."""
+    settings: Settings
+    _registry: Optional[OrasBundleRegistry] = None
+    
+    @classmethod
+    def from_env(cls) -> CLIContext:
+        """Create context from environment variables."""
+        settings = create_settings_from_env()  # Fresh instance every time
+        return cls(settings=settings)
+    
+    @property
+    def registry(self) -> OrasBundleRegistry:
+        """Lazy initialization of registry."""
+        if self._registry is None:
+            self._registry = OrasBundleRegistry(self.settings)
+        return self._registry
+```
+
+**No Global State:**
+- `create_settings_from_env()` returns fresh instances (no caching)
+- Each CLI command gets its own context
+- Test isolation guaranteed - no shared state between tests
+- Clean dependency injection throughout
+
+**Benefits:**
+- ✅ Perfect test isolation (no cache contamination)
+- ✅ Explicit dependencies (easy to trace data flow)
+- ✅ Easy to mock for testing
+- ✅ No hidden global state or singletons
+- ✅ Each test gets fresh instances
 
 ---
 
-## 2) Media Types: Why They Matter and What We Use
+## 2) Media Types: Simplified to Standard JSON
 
-Media types (MIME) in OCI/ORAS tell registries, scanners, admissions, and tooling **what** a blob or JSON is. We make them explicit and versionable.
+We use standard media types throughout, avoiding custom types for simplicity and compatibility.
 
 ```python
-MediaType = Literal[
-  "application/vnd.modelops.bundle.manifest+json",
-  "application/vnd.modelops.layer+json",
-  "application/vnd.modelops.external-ref+json",
-  "application/vnd.oci.image.manifest.v1+json",
-]
+# All our JSON content uses standard media type
+JSON_MEDIA_TYPE = "application/json"
+
+# OCI standard types we still use
+OCI_IMAGE_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+OCI_EMPTY_CONFIG = "application/vnd.oci.empty.v1+json"
 ```
 
-### 1.1 Benefits
+### 2.1 Benefits of Standard Media Types
 
-- **Interoperability**: Any OCI-compliant registry or proxy can host our artifacts.
-- **Policy/Security**: Cluster policy can allowlist/blocklist types. Validation can flag unknown types.
-- **Extensibility**: We can introduce `+v2+json` later without breaking old clients.
-- **Clarity**: Humans and machines understand whether a JSON is a top-level bundle, a per-layer index, or an external pointer.
+- **Simplicity**: No custom media type registration or validation needed
+- **Compatibility**: Standard JSON works everywhere without special handling
+- **Clarity**: Content is identified by structure and title annotations, not media type
+- **Reduced Complexity**: No versioning concerns with media types
+- **Universal Support**: Every registry, tool, and scanner understands `application/json`
 
-### 1.2 Our Types
+### 2.2 Our Content Types
 
-| Media type | Payload | Why it exists |
-|---|---|---|
-| `application/vnd.modelops.bundle.manifest+json` | Top-level bundle manifest (name, version, models, roles, list of layers with content-addresses) | Single source of truth; content-addressable; signed |
-| `application/vnd.modelops.layer+json` | Optional per-layer index (list of internal blobs and external refs) | Enables layer-scoped pulls and fine-grained diffs |
-| `application/vnd.modelops.external-ref+json` | Pointer records for big data (`az://…`, `s3://…`, `gs://…`) with size and checksums | Keeps the registry small; decouples cold data lifecycle |
-| `application/vnd.oci.image.manifest.v1+json` | The wrapper OCI manifest that stitches our JSON into a standards-compliant artifact | Lets ORAS/Docker tooling move our content |
+| Content | Media Type | Identification Method |
+|---------|------------|---------------------|
+| Bundle Manifest | `application/json` | Title annotation: `bundle.manifest.json` |
+| Layer Index | `application/json` | Title annotation: `layer.{name}.json` |
+| OCI Manifest | `application/vnd.oci.image.manifest.v1+json` | Standard OCI wrapper |
 
-> Engineering note: We **do not** embed big data in OCI layers. We store **external pointers** with checksums and optional storage class (hot/cool/archive). This keeps pushes fast and registries lean, yet preserves integrity.
+**Content Identification Strategy:**
+- We use OCI title annotations (`org.opencontainers.image.title`) to identify content purpose
+- Structure validation determines if JSON is a valid bundle manifest or layer index  
+- No need for custom media types - standard JSON with clear titles works perfectly
+
+> **Design Decision**: We moved away from custom media types (`application/vnd.modelops.*`) to standard `application/json` for all our JSON content. This eliminates complexity while maintaining full functionality through title-based identification.
 
 ---
 
@@ -686,7 +739,7 @@ This keeps runtime pure and deterministic while letting storage strategies evolv
 - **Runtime**: Pure business logic, only knows ContentProvider protocol
 - **ContentProvider**: Protocol defining the runtime's needs (iter_entries, fetch_external)
 - **BundleContentProvider**: Production implementation orchestrating both storage types
-- **BundleRegistryStore/ExternalStore**: Storage protocols abstracting registry/blob operations
+- **OrasBundleRegistry/ExternalStore**: Storage protocols abstracting registry/blob operations
 - **Fakes**: In-memory test implementations for deterministic testing without network calls
 
 ### Responsibility Split
@@ -829,9 +882,9 @@ To keep the runtime pure and testable, storage concerns are factored behind two
 minimal interfaces. Providers use these interfaces; the runtime never speaks to
 SDKs directly.
 
-### Interfaces 
+### Storage Interfaces 
 ```python
-# modelops_bundles/storage/base.py
+# modelops_bundles/storage/base.py - External Storage Protocol
 from dataclasses import dataclass
 from typing import Protocol, Optional
 
@@ -842,18 +895,22 @@ class ExternalStat:
     sha256: str        # 64 hex (no 'sha256:' prefix)
     tier: Optional[str] = None  # "hot" | "cool" | "archive" (hint only)
 
-class BundleRegistryStore(Protocol):
-    def blob_exists(self, digest: str) -> bool: ...
-    def get_blob(self, digest: str) -> bytes: ...
-    def put_blob(self, digest: str, data: bytes) -> None: ...
-    def get_manifest(self, digest_or_ref: str) -> bytes: ...
-    def put_manifest(self, media_type: str, payload: bytes) -> str: ...
-    # Returns digest of stored manifest
-
 class ExternalStore(Protocol):
     def stat(self, uri: str) -> ExternalStat: ...
     def get(self, uri: str) -> bytes: ...
     def put(self, uri: str, data: bytes, *, sha256: Optional[str]=None) -> ExternalStat: ...
+```
+
+```python
+# modelops_bundles/storage/oras_bundle_registry.py - Direct Implementation
+class OrasBundleRegistry:
+    """Direct ORAS implementation (no protocol abstraction)."""
+    def __init__(self, settings: Settings): ...
+    def blob_exists(self, repo: str, digest: str) -> bool: ...
+    def get_blob(self, repo: str, digest: str) -> bytes: ...
+    def put_blob(self, repo: str, digest: str, data: bytes) -> None: ...
+    def get_manifest(self, repo: str, digest_or_ref: str) -> bytes: ...
+    def put_manifest(self, repo: str, media_type: str, payload: bytes, ref: str) -> str: ...
 ```
 
 ### Design notes
@@ -874,7 +931,7 @@ class ExternalStore(Protocol):
 
 | Concern | Runtime | Provider |
 |---------|---------|----------|
-| Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via BundleRegistryStore/ExternalStore |
+| Storage protocols (ORAS, Azure, S3) | ❌ Never | ✅ Via OrasBundleRegistry/ExternalStore |
 | Authentication/credentials | ❌ Never | ✅ Implementation detail |
 | Network retries/timeouts | ❌ Never | ✅ Implementation detail |
 | Content enumeration | ❌ Never | ✅ Via ContentProvider.iter_entries() |
@@ -888,15 +945,15 @@ To enable fast, deterministic tests and examples, we provide in-memory fakes nex
 modelops_bundles/storage/
   base.py          # protocols & ExternalStat
   fakes/
-    fake_oras.py  # FakeBundleRegistryStore
+    fake_oras.py  # FakeOrasBundleRegistry
     fake_external.py
 ```
 
-**Why co-locate fakes with protocols?**
+**Why co-locate fakes with storage implementations?**
 
-- **Drift control**: When someone edits the protocols ExternalStore/BundleRegistryStore, the fake breaks in the same module tree—forcing updates and keeping the seam honest.
+- **Drift control**: When someone edits ExternalStore protocol or OrasBundleRegistry class, the fakes break in the same module tree—forcing updates and keeping the seam honest.
 - **Reusability**: Other packages (CLI, runners) can import the fakes for their unit tests without re-inventing fixtures.
-- **Type-safety**: The fake imports the exact protocol types (no circular test-import hacks).
+- **Type-safety**: The fakes implement protocols or match class interfaces (no circular test-import hacks).
 - **Deterministic tests**: In-memory storage lets us test runtime/provider logic with zero external deps.
 
 **Packaging concerns addressed:**

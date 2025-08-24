@@ -13,7 +13,6 @@ OCI_EMPTY_CONFIG = "application/vnd.oci.empty.v1+json"
 # OCI standard layer types - now used for our JSON files  
 OCI_IMAGE_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
 OCI_GENERIC_LAYER = "application/octet-stream"
-APPLICATION_JSON = "application/json"
 
 # Empty config for minimal OCI images (always {})
 OCI_EMPTY_CONFIG_BYTES = b"{}"
@@ -36,7 +35,6 @@ __all__ = [
     "OCI_EMPTY_CONFIG",
     "OCI_IMAGE_LAYER",
     "OCI_GENERIC_LAYER",
-    "APPLICATION_JSON",
     "OCI_EMPTY_CONFIG_BYTES",
     "OCI_EMPTY_CONFIG_DIGEST", 
     "OCI_EMPTY_CONFIG_SIZE",

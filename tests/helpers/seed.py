@@ -9,7 +9,6 @@ from typing import Dict
 
 from modelops_bundles.storage.repo_path import build_repo
 from modelops_bundles.storage.oci_media_types import (
-    BUNDLE_MANIFEST, 
     OCI_IMAGE_MANIFEST,
     OCI_EMPTY_CONFIG,
     OCI_EMPTY_CONFIG_DIGEST,
@@ -45,7 +44,7 @@ def seed_bundle(
     
     # Create bundle manifest
     bundle_manifest = {
-        "mediaType": BUNDLE_MANIFEST,
+        "mediaType": "application/json",
         "name": name,
         "version": tag,
         "roles": roles,
@@ -75,7 +74,7 @@ def seed_bundle(
             "size": OCI_EMPTY_CONFIG_SIZE
         },
         "layers": [{
-            "mediaType": BUNDLE_MANIFEST,
+            "mediaType": "application/json",
             "digest": bm_digest,
             "size": len(bm_bytes)
         }],
