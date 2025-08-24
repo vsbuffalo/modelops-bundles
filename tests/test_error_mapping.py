@@ -29,8 +29,6 @@ class TestExitCodeMapping:
         download_error = Mock()
         download_error.__class__.__name__ = "BundleDownloadError"
         
-        media_type_error = Mock()
-        media_type_error.__class__.__name__ = "UnsupportedMediaType"
         
         role_mismatch = Mock()
         role_mismatch.__class__.__name__ = "RoleLayerMismatch"
@@ -42,7 +40,6 @@ class TestExitCodeMapping:
         assert exit_code_for(bundle_not_found) == 1
         assert exit_code_for(validation_error) == 2
         assert exit_code_for(download_error) == 3
-        assert exit_code_for(media_type_error) == 10
         assert exit_code_for(role_mismatch) == 11
         assert exit_code_for(workdir_conflict) == 12
 
@@ -65,7 +62,6 @@ class TestExitCodeMapping:
         assert EXIT_CODES["BundleNotFoundError"] == 1
         assert EXIT_CODES["ValidationError"] == 2
         assert EXIT_CODES["BundleDownloadError"] == 3
-        assert EXIT_CODES["UnsupportedMediaType"] == 10
         assert EXIT_CODES["RoleLayerMismatch"] == 11
         assert EXIT_CODES["WorkdirConflict"] == 12
 
@@ -76,7 +72,6 @@ class TestExitCodeMapping:
             "ValidationError",
             "ValueError",  # Added ValueError mapping
             "BundleDownloadError",
-            "UnsupportedMediaType",
             "RoleLayerMismatch",
             "WorkdirConflict"
         }
@@ -244,7 +239,6 @@ class TestErrorMappingIntegration:
             "BundleNotFoundError": 1,      # Bundle not found
             "ValidationError": 2,          # Validation error
             "BundleDownloadError": 3,      # Network/download error
-            "UnsupportedMediaType": 10,    # Unsupported media type
             "RoleLayerMismatch": 11,       # Role/layer mismatch
             "WorkdirConflict": 12,         # Workdir conflict
         }

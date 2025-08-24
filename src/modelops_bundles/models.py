@@ -10,7 +10,7 @@ import hashlib
 import json
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, computed_field
 
@@ -164,10 +164,10 @@ class LayerIndexEntry(BaseModel):
 
 class LayerIndex(BaseModel):
     """Layer index document - manifest of files in a layer."""
-    media_type: Literal["application/vnd.modelops.layer+json"] = Field(
-        default="application/vnd.modelops.layer+json",
+    media_type: str = Field(
+        default="application/json",
         alias="mediaType",
-        description="Media type identifier"
+        description="Media type identifier (now uses standard JSON)"
     )
     layer: str = Field(..., description="Layer name")
     entries: List[LayerIndexEntry] = Field(..., description="File entries in this layer")
@@ -197,10 +197,10 @@ class LayerIndex(BaseModel):
 
 class BundleManifest(BaseModel):
     """Top-level bundle manifest document."""
-    media_type: Literal["application/vnd.modelops.bundle.manifest+json"] = Field(
-        default="application/vnd.modelops.bundle.manifest+json",
+    media_type: str = Field(
+        default="application/json",
         alias="mediaType",
-        description="Media type identifier"
+        description="Media type identifier (now uses standard JSON)"
     )
     
     # Bundle identity
@@ -293,5 +293,5 @@ class StoragePlan(BaseModel):
 
 
 # Media type constants for easy import
-BUNDLE_MANIFEST_TYPE = "application/vnd.modelops.bundle.manifest+json"
-LAYER_INDEX_TYPE = "application/vnd.modelops.layer+json"
+BUNDLE_MANIFEST_TYPE = "application/json"
+LAYER_INDEX_TYPE = "application/json"

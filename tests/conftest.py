@@ -3,7 +3,8 @@ import pytest
 
 from modelops_bundles.settings import Settings
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from .storage.fakes.fake_oci_registry import FakeOciRegistry
+# Removed FakeOciRegistry - now using FakeOrasBundleRegistry
+from .storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 from .storage.fakes.fake_external import FakeExternalStore
 
 # Import fixtures to make them available
@@ -45,8 +46,24 @@ def settings():
 
 @pytest.fixture
 def registry():
-    """Standard fake OCI registry for testing."""
-    return FakeOciRegistry()
+    """Standard fake registry for testing (now ORAS-based)."""
+    return FakeOrasBundleRegistry()
+
+
+@pytest.fixture
+def oras_registry():
+    """Alias for registry fixture - both are ORAS-based now."""
+    return FakeOrasBundleRegistry()
+
+
+@pytest.fixture
+def oras_provider(settings, oras_registry, external):
+    """Bundle content provider using ORAS registry for testing."""
+    return BundleContentProvider(
+        registry=oras_registry,
+        external=external,
+        settings=settings
+    )
 
 
 @pytest.fixture

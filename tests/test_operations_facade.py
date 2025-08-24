@@ -16,7 +16,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.operations import Operations, OpsConfig
 from modelops_bundles.runtime import MaterializeResult
 from tests.fakes.fake_provider import FakeProvider
-from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 
 
 class TestOperationsFacade:
@@ -26,7 +26,7 @@ class TestOperationsFacade:
         """Test facade initializes with correct configuration."""
         config = OpsConfig(ci=True, cache=False, zstd_level=10)
         provider = FakeProvider()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         
         ops = Operations(config=config, provider=provider, registry=registry)
         
@@ -37,7 +37,7 @@ class TestOperationsFacade:
     def test_resolve_delegates_to_runtime(self):
         """Test resolve method delegates to runtime with correct parameters."""
         config = OpsConfig(cache=True)
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
@@ -59,7 +59,7 @@ class TestOperationsFacade:
     def test_resolve_respects_cache_config(self):
         """Test resolve method respects cache configuration."""
         config = OpsConfig(cache=False)
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
@@ -77,7 +77,7 @@ class TestOperationsFacade:
     def test_materialize_requires_provider(self):
         """Test materialize method requires provider to be configured."""
         config = OpsConfig()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, provider=None, registry=registry)
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
@@ -89,7 +89,7 @@ class TestOperationsFacade:
         """Test materialize method delegates to runtime with all parameters."""
         config = OpsConfig()
         provider = FakeProvider()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, provider=provider, registry=registry)
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
@@ -125,7 +125,7 @@ class TestOperationsFacade:
         """Test pull method is correct alias for materialize."""
         config = OpsConfig()
         provider = FakeProvider()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, provider=provider, registry=registry)
         
         ref = BundleRef(name="test/bundle", version="v1.0.0")
@@ -155,7 +155,7 @@ class TestOperationsFacade:
     def test_export_delegates_to_export_module(self):
         """Test export method delegates to export module with config."""
         config = OpsConfig(zstd_level=15)
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         with patch('modelops_bundles.export.write_deterministic_archive') as mock_export:
@@ -171,7 +171,7 @@ class TestOperationsFacade:
     def test_export_uses_default_zstd_level(self):
         """Test export uses default zstd level from config."""
         config = OpsConfig()  # Default zstd_level=19
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         with patch('modelops_bundles.export.write_deterministic_archive') as mock_export:
@@ -187,7 +187,7 @@ class TestOperationsFacade:
     def test_stubbed_commands_return_descriptive_messages(self):
         """Test stubbed commands return descriptive messages."""
         config = OpsConfig()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         assert "Scanned /work/dir (stub)" == ops.scan("/work/dir")
@@ -201,7 +201,7 @@ class TestOperationsFacade:
         """Test that configuration policies are consistently applied."""
         # Test CI mode configuration
         config = OpsConfig(ci=True, cache=False, zstd_level=5, human=True)
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, registry=registry)
         
         assert ops.cfg.ci is True
@@ -213,7 +213,7 @@ class TestOperationsFacade:
         """Test provider injection enables testing with fakes."""
         fake_provider = FakeProvider()
         config = OpsConfig()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, provider=fake_provider, registry=registry)
         
         # Should be able to call provider-dependent methods
@@ -269,7 +269,7 @@ class TestOpsConfig:
         """Test configuration values are used consistently."""
         config = OpsConfig(cache=False, zstd_level=5)
         provider = FakeProvider()
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         ops = Operations(config=config, provider=provider, registry=registry)
         
         # Verify cache setting is passed through

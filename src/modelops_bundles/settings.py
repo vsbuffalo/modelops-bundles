@@ -99,11 +99,10 @@ class Settings:
             raise ValueError("az_key specified but az_account is missing")
 
 
-# Module-level cache for settings
-_settings_cache: Optional[Settings] = None
+# Settings loading functions (no caching)
 
 
-def load_settings_from_env() -> Settings:
+def create_settings_from_env() -> Settings:
     """
     Load settings from environment variables with memoization.
     
@@ -132,21 +131,12 @@ def load_settings_from_env() -> Settings:
         ValueError: If configuration is invalid or required values missing
         
     Note:
-        Results are cached after first call. To reload settings in tests,
-        call reset_settings_cache() first.
+        Creates a fresh Settings instance every time (no caching).
+        This ensures test isolation and eliminates global state.
     """
-    global _settings_cache
-    if _settings_cache is not None:
-        return _settings_cache
-    
-    _settings_cache = _load_settings_impl()
-    return _settings_cache
+    return _load_settings_impl()
 
 
-def reset_settings_cache() -> None:
-    """Reset the settings cache for testing purposes."""
-    global _settings_cache
-    _settings_cache = None
 
 
 def _load_settings_impl() -> Settings:

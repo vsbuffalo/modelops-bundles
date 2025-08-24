@@ -14,7 +14,7 @@ from unittest.mock import patch
 from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 from modelops_bundles.runtime import materialize
 from modelops_bundles.runtime_types import ContentProvider, MatEntry
-from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 from collections.abc import Iterable
 
 
@@ -23,7 +23,7 @@ class TestProvenanceFile:
     
     def _create_test_setup(self):
         """Create test registry and mock resolved bundle."""
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         repository = "test/repo"
         
         # Create a mock resolved bundle

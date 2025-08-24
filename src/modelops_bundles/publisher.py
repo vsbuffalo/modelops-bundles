@@ -17,6 +17,7 @@ from .models import (
     StoragePlan,
     LayerIndex,
     BundleManifest,
+    StorageDecision,
     BUNDLE_MANIFEST_TYPE,
     LAYER_INDEX_TYPE
 )
@@ -27,24 +28,22 @@ from .planner import (
     create_bundle_manifest,
     detect_changes
 )
-from .storage.oci_registry import OciRegistry
-from .storage.registry_factory import make_registry
+from .storage.oras_bundle_registry import OrasBundleRegistry
 from .storage.repo_path import build_repo
-from .settings import Settings, load_settings_from_env
+from .settings import Settings
 from .storage.oci_media_types import (
-    OCI_IMAGE_MANIFEST,
-    OCI_EMPTY_CONFIG,
-    OCI_EMPTY_CONFIG_BYTES,
-    OCI_EMPTY_CONFIG_DIGEST,
-    OCI_EMPTY_CONFIG_SIZE,
-    BUNDLE_MANIFEST,
-    LAYER_INDEX
+    MODELOPS_BUNDLE_ANNOTATION,
+    MODELOPS_BUNDLE_TYPE,
+    MODELOPS_TITLE_ANNOTATION,
+    BUNDLE_MANIFEST_TITLE,
+    LAYER_INDEX_TITLE_FORMAT,
+    APPLICATION_JSON
 )
 from .runtime import BundleDownloadError
 
 
 def push_bundle(working_dir: str | Path, tag: str = None, *,
-                registry: Optional[OciRegistry] = None,
+                registry: Optional[OrasBundleRegistry] = None,
                 settings: Optional['Settings'] = None,
                 force: bool = False,
                 dry_run: bool = False) -> str:
@@ -85,11 +84,12 @@ def push_bundle(working_dir: str | Path, tag: str = None, *,
     
     # Load settings if not provided
     if settings is None:
-        settings = load_settings_from_env()
+        from .settings import create_settings_from_env
+        settings = create_settings_from_env()
     
     # Create registry if not provided
     if registry is None:
-        registry = make_registry(settings)
+        registry = OrasBundleRegistry(settings)
     
     # Phase 1: Scan directory and parse specification
     spec = scan_directory(working_dir)
@@ -114,17 +114,96 @@ def push_bundle(working_dir: str | Path, tag: str = None, *,
         # For now, always proceed with push
         pass
     
-    # Phase 5: Stage files and push (or show what would be pushed)
+    # Phase 5: Push with ORAS (simplified)
     if dry_run:
         return _show_dry_run_summary(plan, layer_indexes, bundle_manifest, repo, tag)
     else:
-        return _push_staged_bundle(plan, layer_indexes, bundle_manifest, 
-                                 repo, tag, registry)
+        return _push_with_oras(plan, layer_indexes, bundle_manifest, repo, tag, registry)
+
+
+def _push_with_oras(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
+                   bundle_manifest: BundleManifest, repo: str, tag: str,
+                   registry: OrasBundleRegistry) -> str:
+    """
+    Push bundle using ORAS - replaces complex staging logic.
+    
+    This is dramatically simplified compared to the old approach:
+    - No manual OCI manifest building
+    - No staging directories
+    - No custom media type handling
+    - ORAS handles all the complexity
+    
+    Returns:
+        Canonical manifest digest
+    """
+    import tempfile
+    import json
+    from pathlib import Path
+    
+    # Create temp files for JSON documents
+    files_to_push = []
+    
+    with tempfile.TemporaryDirectory(prefix="oras-bundle-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        
+        # 1. Write bundle manifest with title annotation
+        bundle_path = tmp_path / BUNDLE_MANIFEST_TITLE
+        bundle_path.write_text(
+            json.dumps(bundle_manifest.model_dump(by_alias=True), 
+                      sort_keys=True, separators=(',', ':'))
+        )
+        files_to_push.append({
+            "path": str(bundle_path),
+            "annotations": {MODELOPS_TITLE_ANNOTATION: BUNDLE_MANIFEST_TITLE}
+        })
+        
+        # 2. Write layer indexes with title annotations
+        for layer_name, layer_index in layer_indexes.items():
+            layer_title = LAYER_INDEX_TITLE_FORMAT.format(name=layer_name)
+            layer_path = tmp_path / layer_title
+            layer_path.write_text(
+                json.dumps(layer_index.model_dump(by_alias=True),
+                          sort_keys=True, separators=(',', ':'))
+            )
+            files_to_push.append({
+                "path": str(layer_path),
+                "annotations": {MODELOPS_TITLE_ANNOTATION: layer_title}
+            })
+        
+        # 3. Add ORAS files from plan
+        for layer_plan in plan.layer_plans.values():
+            for file_entry in layer_plan.files:
+                storage_decision = layer_plan.storage_decisions[file_entry.artifact_path]
+                if storage_decision == StorageDecision.ORAS:  # Only include ORAS files
+                    files_to_push.append({
+                        "path": str(file_entry.src_path)
+                    })
+        
+        # 4. Push with ORAS using bundle annotations
+        manifest_annotations = {
+            MODELOPS_BUNDLE_ANNOTATION: MODELOPS_BUNDLE_TYPE,
+            "org.opencontainers.image.title": f"{plan.spec.name}:{plan.spec.version}",
+            "org.opencontainers.image.description": plan.spec.description or ""
+        }
+        
+        digest = registry.push_bundle(
+            files=files_to_push,
+            repo=repo,
+            tag=tag,
+            manifest_annotations=manifest_annotations
+        )
+        
+        # 5. Print success message
+        print(f"✅ Pushed bundle {repo}:{tag}")
+        print(f"   Manifest digest: {digest}")
+        print(f"   Files: {len(files_to_push)} total")
+        
+        return digest
 
 
 def _push_staged_bundle(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
                        bundle_manifest: BundleManifest, repo: str, tag: str,
-                       registry: OciRegistry) -> str:
+                       registry: OrasBundleRegistry) -> str:
     """
     Stage files and push to registry using manual OCI manifest assembly.
     
@@ -165,7 +244,7 @@ def _push_staged_bundle(plan: StoragePlan, layer_indexes: Dict[str, LayerIndex],
 
 def _build_and_push_oci_manifest(files_with_types: List[Tuple[str, str]], 
                                 plan: StoragePlan, repo: str, tag: str,
-                                registry: OciRegistry) -> str:
+                                registry: OrasBundleRegistry) -> str:
     """
     Build OCI image manifest manually and push to registry.
     

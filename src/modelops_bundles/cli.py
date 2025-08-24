@@ -24,7 +24,7 @@ from .operations.printers import (
     print_push_summary, print_stub_message
 )
 from .runtime_types import ContentProvider
-from .providers.bundle_content import default_provider_from_env
+from .cli_context import CLIContext
 
 app = typer.Typer(name="modelops-bundles", help="ModelOps Bundles CLI")
 
@@ -105,27 +105,28 @@ def _create_provider(provider_name: Optional[str] = None) -> Optional[ContentPro
                 typer.echo("Warning: FakeProvider not available, using real provider")
     
     # Use real provider for production
-    return default_provider_from_env()
+    from .providers.bundle_content import create_provider_from_env
+    return create_provider_from_env()
 
 def _create_fake_registry():
     """
-    Create FakeOciRegistry for testing.
+    Create FakeOrasBundleRegistry for testing.
     
     Returns:
-        FakeOciRegistry instance with seeded test data, or None if unavailable
+        FakeOrasBundleRegistry instance with seeded test data, or None if unavailable
     """
     try:
-        from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
-        fake_registry = FakeOciRegistry()
+        from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
+        fake_registry = FakeOrasBundleRegistry()
         # Add some fake manifests for testing
-        _add_fake_manifests_oci(fake_registry)
+        _add_fake_manifests_oras(fake_registry)
         return fake_registry
     except ImportError:
-        typer.echo("Warning: FakeOciRegistry not available")
+        typer.echo("Warning: FakeOrasBundleRegistry not available")
         return None
 
-def _add_fake_manifests_oci(fake_registry):
-    """Add fake manifests to FakeOciRegistry for testing."""
+def _add_fake_manifests_oras(fake_registry):
+    """Add fake manifests to FakeOrasBundleRegistry for testing."""
     import json
     import hashlib
     
@@ -158,7 +159,7 @@ def _add_fake_manifests_oci(fake_registry):
         
         # Create layer index
         layer_index = {
-            "mediaType": "application/vnd.modelops.layer+json",
+            "mediaType": "application/json",
             "entries": layer_entries
         }
         layer_payload = json.dumps(layer_index, sort_keys=True, separators=(',', ':')).encode()
@@ -168,7 +169,7 @@ def _add_fake_manifests_oci(fake_registry):
     
     # Create data layer with external entries
     data_layer_index = {
-        "mediaType": "application/vnd.modelops.layer+json",
+        "mediaType": "application/json",
         "entries": [
             {
                 "path": "data/train.csv",
@@ -197,7 +198,7 @@ def _add_fake_manifests_oci(fake_registry):
     
     # Create bundle manifest for "bundle" name (used by CLI tests)
     bundle_manifest = {
-        "mediaType": "application/vnd.modelops.bundle.manifest+json",
+        "mediaType": "application/json",
         "name": "bundle",
         "version": "1.0.0",
         "roles": {
@@ -237,29 +238,24 @@ def resolve(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, verbose=verbose)
         
-        # Create registry and settings based on provider type
         if provider == "fake":
+            # Use fake registry for testing
             registry = _create_fake_registry()
-            # Use fake settings for testing
             from .settings import Settings
             settings = Settings(
                 registry_url="http://fake-registry:5000",
                 registry_repo="testns"
             )
             if registry is None:
-                # Fallback to real registry
-                from .settings import load_settings_from_env
-                from .storage.registry_factory import make_registry
-                settings = load_settings_from_env()
-                registry = make_registry(settings)
+                # Fallback to real context
+                context = CLIContext.from_env()
+                registry = context.registry
+                settings = context.settings
+            ops = Operations(config=config, registry=registry, settings=settings)
         else:
-            # Production path - create registry using factory
-            from .settings import load_settings_from_env
-            from .storage.registry_factory import make_registry
-            settings = load_settings_from_env()
-            registry = make_registry(settings)
-        
-        ops = Operations(config=config, registry=registry, settings=settings)
+            # Production path - use CLI context
+            context = CLIContext.from_env()
+            ops = Operations(config=config, registry=context.registry, settings=context.settings)
         
         resolved = ops.resolve(ref)
         print_resolved_bundle(resolved, verbose=verbose)
@@ -284,46 +280,57 @@ def materialize(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
         
-        # Load settings for all paths
-        from .settings import load_settings_from_env
-        settings = load_settings_from_env()
-        
-        # Create registry and provider based on provider type
         if provider == "fake":
+            # Use fake registry and external store for testing
             registry = _create_fake_registry()
+            from .settings import Settings
+            settings = Settings(
+                registry_url="http://fake-registry:5000",
+                registry_repo="testns"
+            )
+            
             if registry is None:
-                # Fallback to real registry
-                from .storage.registry_factory import make_registry
-                registry = make_registry(settings)
+                # Fallback to real context
+                context = CLIContext.from_env()
+                registry = context.registry
+                settings = context.settings
+                # Create real provider
+                from .providers.bundle_content import create_provider_from_env
+                content_provider = create_provider_from_env()
+            else:
+                # Use fake external store
+                try:
+                    from tests.storage.fakes.fake_external import FakeExternalStore
+                    external = FakeExternalStore()
+                except ImportError:
+                    from .storage.object_store import AzureExternalAdapter
+                    external = AzureExternalAdapter(settings=settings)
+                
+                from .providers.bundle_content import BundleContentProvider
+                content_provider = BundleContentProvider(
+                    registry=registry, 
+                    external=external,
+                    settings=settings
+                )
             
-            # Use fake external store too
-            try:
-                from tests.storage.fakes.fake_external import FakeExternalStore
-                external = FakeExternalStore()
-            except ImportError:
-                from .storage.object_store import AzureExternalAdapter
-                external = AzureExternalAdapter(settings=settings)
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=registry,
+                settings=settings
+            )
         else:
-            # Production path - create real adapters
-            from .storage.registry_factory import make_registry
-            from .storage.object_store import AzureExternalAdapter
+            # Production path - use CLI context and provider factory
+            context = CLIContext.from_env()
+            from .providers.bundle_content import create_provider_from_env
+            content_provider = create_provider_from_env()
             
-            registry = make_registry(settings)
-            external = AzureExternalAdapter(settings=settings)
-        
-        # Always pass settings to provider
-        from .providers.bundle_content import BundleContentProvider
-        content_provider = BundleContentProvider(
-            registry=registry, 
-            external=external,
-            settings=settings
-        )
-        
-        ops = Operations(
-            config=config,
-            provider=content_provider,
-            registry=registry
-        )
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=context.registry,
+                settings=context.settings
+            )
         
         result = ops.materialize(
             ref=ref,
@@ -355,46 +362,57 @@ def pull(
         ref = _parse_bundle_ref(bundle_ref)
         config = OpsConfig(cache=not no_cache, ci=ci, verbose=verbose)
         
-        # Load settings for all paths
-        from .settings import load_settings_from_env
-        settings = load_settings_from_env()
-        
-        # Create registry and provider based on provider type
         if provider == "fake":
+            # Use fake registry and external store for testing
             registry = _create_fake_registry()
+            from .settings import Settings
+            settings = Settings(
+                registry_url="http://fake-registry:5000",
+                registry_repo="testns"
+            )
+            
             if registry is None:
-                # Fallback to real registry
-                from .storage.registry_factory import make_registry
-                registry = make_registry(settings)
+                # Fallback to real context
+                context = CLIContext.from_env()
+                registry = context.registry
+                settings = context.settings
+                # Create real provider
+                from .providers.bundle_content import create_provider_from_env
+                content_provider = create_provider_from_env()
+            else:
+                # Use fake external store
+                try:
+                    from tests.storage.fakes.fake_external import FakeExternalStore
+                    external = FakeExternalStore()
+                except ImportError:
+                    from .storage.object_store import AzureExternalAdapter
+                    external = AzureExternalAdapter(settings=settings)
+                
+                from .providers.bundle_content import BundleContentProvider
+                content_provider = BundleContentProvider(
+                    registry=registry, 
+                    external=external,
+                    settings=settings
+                )
             
-            # Use fake external store too
-            try:
-                from tests.storage.fakes.fake_external import FakeExternalStore
-                external = FakeExternalStore()
-            except ImportError:
-                from .storage.object_store import AzureExternalAdapter
-                external = AzureExternalAdapter(settings=settings)
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=registry,
+                settings=settings
+            )
         else:
-            # Production path - create real adapters
-            from .storage.registry_factory import make_registry
-            from .storage.object_store import AzureExternalAdapter
+            # Production path - use CLI context and provider factory
+            context = CLIContext.from_env()
+            from .providers.bundle_content import create_provider_from_env
+            content_provider = create_provider_from_env()
             
-            registry = make_registry(settings)
-            external = AzureExternalAdapter(settings=settings)
-        
-        # Always pass settings to provider
-        from .providers.bundle_content import BundleContentProvider
-        content_provider = BundleContentProvider(
-            registry=registry, 
-            external=external,
-            settings=settings
-        )
-        
-        ops = Operations(
-            config=config,
-            provider=content_provider,
-            registry=registry
-        )
+            ops = Operations(
+                config=config,
+                provider=content_provider,
+                registry=context.registry,
+                settings=context.settings
+            )
         
         result = ops.pull(
             ref=ref,
@@ -463,21 +481,9 @@ def scan(
     
     def _scan() -> None:
         config = OpsConfig()
-        # Provide minimal registry for stub operations 
-        registry = _create_fake_registry()
-        if registry is None:
-            from .settings import load_settings_from_env
-            from .storage.registry_factory import make_registry
-            settings = load_settings_from_env()
-            registry = make_registry(settings)
-        else:
-            # Use fake settings for testing
-            from .settings import Settings
-            settings = Settings(
-                registry_url="http://fake-registry:5000",
-                registry_repo="testns"
-            )
-        ops = Operations(config=config, registry=registry, settings=settings)
+        # Use CLI context for consistency
+        context = CLIContext.from_env()
+        ops = Operations(config=config, registry=context.registry, settings=context.settings)
         
         result = ops.scan(working_dir)
         print_stub_message("scan")
@@ -494,14 +500,9 @@ def plan(
     
     def _plan() -> None:
         config = OpsConfig()
-        # Provide minimal registry for stub operations
-        registry = _create_fake_registry()
-        if registry is None:
-            from .settings import load_settings_from_env
-            from .storage.registry_factory import make_registry
-            settings = load_settings_from_env()
-            registry = make_registry(settings)
-        ops = Operations(config=config, registry=registry)
+        # Use CLI context for consistency
+        context = CLIContext.from_env()
+        ops = Operations(config=config, registry=context.registry, settings=context.settings)
         
         result = ops.plan(working_dir, external_preview=external_preview)
         print_stub_message("plan")
@@ -517,14 +518,9 @@ def diff(
     
     def _diff() -> None:
         config = OpsConfig()
-        # Provide minimal registry for stub operations
-        registry = _create_fake_registry()
-        if registry is None:
-            from .settings import load_settings_from_env
-            from .storage.registry_factory import make_registry
-            settings = load_settings_from_env()
-            registry = make_registry(settings)
-        ops = Operations(config=config, registry=registry)
+        # Use CLI context for consistency
+        context = CLIContext.from_env()
+        ops = Operations(config=config, registry=context.registry, settings=context.settings)
         
         result = ops.diff(ref_or_path)
         print_stub_message("diff")
@@ -544,16 +540,12 @@ def push(
     def _push() -> None:
         config = OpsConfig()
         
-        # Create registry from settings
-        from .settings import load_settings_from_env
-        from .storage.registry_factory import make_registry
-        
-        settings = load_settings_from_env()
-        registry = make_registry(settings)
+        # Use CLI context
+        context = CLIContext.from_env()
         ops = Operations(
             config=config,
-            registry=registry,
-            settings=settings
+            registry=context.registry,
+            settings=context.settings
         )
         
         # Push bundle - this now returns a digest

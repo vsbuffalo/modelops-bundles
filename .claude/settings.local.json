@@ -11,9 +11,13 @@
       "Bash(docker-compose:*)",
       "Bash(source:*)",
       "Bash(bash:*)",
-      "Bash(/dev/null)"
+      "Bash(/dev/null)",
+      "WebFetch(domain:oras-project.github.io)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "/Users/vsb/projects/work/modelops-contracts"
+    ]
   }
 }

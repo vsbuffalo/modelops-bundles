@@ -10,17 +10,18 @@ import pytest
 
 from modelops_bundles.storage.base import ExternalStat
 from tests.storage.fakes.fake_external import FakeExternalStore
-from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+# Removed FakeOciRegistry - using FakeOrasBundleRegistry
+from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 
 
-class TestFakeOciRegistry:
-    """Test FakeOciRegistry implementation."""
+class TestFakeOrasBundleRegistryAdvanced:
+    """Test FakeOrasBundleRegistry implementation (replaces old OCI tests)."""
     
     def test_put_get_blob_roundtrip(self) -> None:
         """Test storing and retrieving blobs."""
         import hashlib
         
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         repo = "test/repo"
         data = b"test blob content"
         digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
@@ -32,7 +33,7 @@ class TestFakeOciRegistry:
     
     def test_put_get_manifest_roundtrip(self) -> None:
         """Test storing and retrieving manifests."""
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
         repo = "test/repo"
         tag = "v1.0.0"
         media_type = "application/vnd.oci.image.manifest.v1+json"
@@ -87,11 +88,24 @@ class TestFakeExternalStore:
 class TestProtocolCompliance:
     """Test that fakes properly implement their protocols."""
     
-    def test_fake_oci_subclasses_protocol(self) -> None:
-        """Test that FakeOciRegistry implements OciRegistry protocol."""
-        from modelops_bundles.storage.oci_registry import OciRegistry
-        registry = FakeOciRegistry()
-        assert isinstance(registry, OciRegistry)
+    
+    def test_fake_oras_bundle_registry_basic_ops(self) -> None:
+        """Test that FakeOrasBundleRegistry supports basic operations."""
+        import hashlib
+        
+        registry = FakeOrasBundleRegistry()
+        
+        # Test basic blob operations
+        repo = "test/repo"
+        data = b"test content"
+        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        
+        # These should work without errors
+        assert not registry.blob_exists(repo, digest)
+        registry.put_blob(repo, digest, data)
+        assert registry.blob_exists(repo, digest)
+        retrieved = registry.get_blob(repo, digest)
+        assert retrieved == data
     
     def test_fake_external_subclasses_protocol(self) -> None:
         """Test that FakeExternalStore implements ExternalStore protocol."""
@@ -108,7 +122,22 @@ class TestIntegrationWithProvider:
         from modelops_bundles.providers.bundle_content import BundleContentProvider
         from modelops_bundles.settings import Settings
         
-        registry = FakeOciRegistry()
+        registry = FakeOrasBundleRegistry()
+        external = FakeExternalStore()
+        settings = Settings(registry_url="http://localhost:5000", registry_repo="test")
+        
+        provider = BundleContentProvider(registry=registry, external=external, settings=settings)
+        assert provider is not None
+        assert provider._registry is registry
+        assert provider._external is external
+        assert provider._settings is settings
+    
+    def test_provider_construction_with_oras_fake(self) -> None:
+        """Test that BundleContentProvider can be constructed with ORAS fake."""
+        from modelops_bundles.providers.bundle_content import BundleContentProvider
+        from modelops_bundles.settings import Settings
+        
+        registry = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         settings = Settings(registry_url="http://localhost:5000", registry_repo="test")
         

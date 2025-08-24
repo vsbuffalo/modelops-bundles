@@ -9,7 +9,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from modelops_bundles.settings import Settings, load_settings_from_env, reset_settings_cache
+from modelops_bundles.settings import Settings, create_settings_from_env
 
 
 class TestSettings:
@@ -151,12 +151,12 @@ class TestSettings:
         assert settings.az_key is None
 
 
-class TestLoadSettingsFromEnv:
-    """Test loading settings from environment variables."""
+class TestCreateSettingsFromEnv:
+    """Test creating settings from environment variables."""
     
     def setup_method(self):
-        """Reset settings cache before each test."""
-        reset_settings_cache()
+        """No setup needed - using dependency injection now."""
+        pass
     
     def test_minimal_env_settings(self):
         """Test loading with minimal required environment variables."""
@@ -166,7 +166,7 @@ class TestLoadSettingsFromEnv:
         }
         
         with patch.dict(os.environ, env, clear=True):
-            settings = load_settings_from_env()
+            settings = create_settings_from_env()
             assert settings.registry_url == "localhost:5000"
             assert settings.registry_insecure is False
             assert settings.registry_user is None
@@ -190,7 +190,7 @@ class TestLoadSettingsFromEnv:
         }
         
         with patch.dict(os.environ, env, clear=True):
-            settings = load_settings_from_env()
+            settings = create_settings_from_env()
             assert settings.registry_url == "https://myregistry.azurecr.io"
             assert settings.registry_insecure is True
             assert settings.registry_user == "testuser"
@@ -211,7 +211,7 @@ class TestLoadSettingsFromEnv:
         }
         
         with patch.dict(os.environ, env, clear=True):
-            settings = load_settings_from_env()
+            settings = create_settings_from_env()
             assert settings.az_account == "testaccount"
             assert settings.az_key == "testkey123=="
             assert settings.az_connection_string is None
@@ -220,7 +220,7 @@ class TestLoadSettingsFromEnv:
         """Test that missing registry URL environment variable raises ValueError."""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="MODELOPS_REGISTRY_URL environment variable is required"):
-                load_settings_from_env()
+                create_settings_from_env()
     
     def test_bool_env_parsing(self):
         """Test parsing of boolean environment variables."""
@@ -246,9 +246,9 @@ class TestLoadSettingsFromEnv:
                 "MODELOPS_REGISTRY_INSECURE": env_value
             }
             
-            reset_settings_cache()
+            # No need to reset cache - using dependency injection now
             with patch.dict(os.environ, env, clear=True):
-                settings = load_settings_from_env()
+                settings = create_settings_from_env()
                 assert settings.registry_insecure == expected, f"Failed for {env_value}"
     
     def test_numeric_env_parsing(self):
@@ -262,7 +262,7 @@ class TestLoadSettingsFromEnv:
         }
         
         with patch.dict(os.environ, env, clear=True):
-            settings = load_settings_from_env()
+            settings = create_settings_from_env()
             assert settings.http_timeout_s == 25.5
             assert settings.http_retry == 5
             assert settings.ext_timeout_s == 90.0
@@ -277,36 +277,34 @@ class TestLoadSettingsFromEnv:
         
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ValueError):  # From float() conversion
-                load_settings_from_env()
+                create_settings_from_env()
     
-    def test_caching_behavior(self):
-        """Test that settings are cached after first load."""
+    def test_no_caching_behavior(self):
+        """Test that settings are NOT cached - fresh instance every time."""
         env = {"MODELOPS_REGISTRY_URL": "localhost:5000", "MODELOPS_REGISTRY_REPO": "test/repo"}
         
         with patch.dict(os.environ, env, clear=True):
             # First call loads from env
-            settings1 = load_settings_from_env()
+            settings1 = create_settings_from_env()
             
-            # Change env but should get cached result
-            os.environ["MODELOPS_REGISTRY_URL"] = "changed:6000"
-            settings2 = load_settings_from_env()
+            # Second call should create new instance
+            settings2 = create_settings_from_env()
             
-            assert settings1 is settings2  # Same object
-            assert settings2.registry_url == "localhost:5000"  # Original value
+            assert settings1 is not settings2  # Different objects
+            assert settings2.registry_url == "localhost:5000"  # Same values
     
-    def test_cache_reset(self):
-        """Test that cache reset allows reloading settings."""
+    def test_env_change_isolation(self):
+        """Test that environment changes are reflected without cache issues."""
         env1 = {"MODELOPS_REGISTRY_URL": "localhost:5000", "MODELOPS_REGISTRY_REPO": "test/repo"}
         env2 = {"MODELOPS_REGISTRY_URL": "localhost:6000", "MODELOPS_REGISTRY_REPO": "test/repo"}
         
         with patch.dict(os.environ, env1, clear=True):
-            settings1 = load_settings_from_env()
+            settings1 = create_settings_from_env()
             assert settings1.registry_url == "localhost:5000"
         
-        # Reset cache and change env
-        reset_settings_cache()
+        # Change env - should pick up new values immediately
         with patch.dict(os.environ, env2, clear=True):
-            settings2 = load_settings_from_env()
+            settings2 = create_settings_from_env()
             assert settings2.registry_url == "localhost:6000"
         
         assert settings1 is not settings2  # Different objects

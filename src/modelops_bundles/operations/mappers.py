@@ -17,7 +17,6 @@ EXIT_CODES = {
     "ValidationError": 2,
     "ValueError": 2,  # Add ValueError mapping
     "BundleDownloadError": 3,
-    "UnsupportedMediaType": 10,
     "RoleLayerMismatch": 11,
     "WorkdirConflict": 12,
 }
@@ -31,7 +30,6 @@ def exit_code_for(exc: BaseException) -> int:
     - 1: Bundle not found (BundleNotFoundError)
     - 2: Validation error (ValidationError)  
     - 3: Network/download error (BundleDownloadError) or unknown error
-    - 10: Unsupported media type (UnsupportedMediaType)
     - 11: Role/layer mismatch (RoleLayerMismatch)
     - 12: Workdir conflict (WorkdirConflict)
     

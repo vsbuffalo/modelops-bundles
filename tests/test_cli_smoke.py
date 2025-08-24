@@ -201,11 +201,11 @@ class TestCLISmokeTests:
     @patch('modelops_bundles.cli._create_fake_registry')
     def test_provider_injection(self, mock_create_fake_registry):
         """Test that registry injection works correctly."""
-        from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
-        from modelops_bundles.cli import _add_fake_manifests_oci
+        from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
+        from modelops_bundles.cli import _add_fake_manifests_oras
         
-        mock_registry = FakeOciRegistry()
-        _add_fake_manifests_oci(mock_registry)  # Add the expected manifests
+        mock_registry = FakeOrasBundleRegistry()
+        _add_fake_manifests_oras(mock_registry)  # Add the expected manifests
         mock_create_fake_registry.return_value = mock_registry
         
         result = self.runner.invoke(app, [

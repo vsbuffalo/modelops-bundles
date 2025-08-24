@@ -65,7 +65,7 @@ def setup_fake_bundle_in_registry(registry, repo: str, bundle_manifest: Dict[str
     4. Tagging the OCI manifest
     
     Args:
-        registry: FakeOciRegistry instance
+        registry: FakeOrasBundleRegistry instance
         repo: Repository path (e.g., "testns/bundles/mybundle")
         bundle_manifest: Bundle manifest dict
         tag: Tag for the bundle (e.g., "v1.0.0")

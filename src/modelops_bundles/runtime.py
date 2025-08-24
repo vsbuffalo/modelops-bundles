@@ -25,9 +25,9 @@ from .runtime_types import ContentProvider, MatEntry, ByteStream
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .storage.oci_registry import OciRegistry
+    from .storage.oras_bundle_registry import OrasBundleRegistry
 
-__all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError", "BundleDownloadError", "UnsupportedMediaType"]
+__all__ = ["resolve", "materialize", "MaterializeResult", "WorkdirConflict", "RoleLayerMismatch", "BundleNotFoundError", "BundleDownloadError"]
 
 
 # Streaming I/O constants and utilities
@@ -129,13 +129,6 @@ class BundleDownloadError(Exception):
     pass
 
 
-class UnsupportedMediaType(Exception):
-    """
-    Raised when media type is not supported or unrecognized.
-    
-    This corresponds to exit code 10 in the CLI.
-    """
-    pass
 
 
 class WorkdirConflict(Exception):
@@ -167,16 +160,16 @@ class BundleNotFoundError(Exception):
     pass
 
 
-def resolve(ref: BundleRef, *, registry: 'OciRegistry' = None, settings = None, cache: bool = True) -> ResolvedBundle:
+def resolve(ref: BundleRef, *, registry: 'OrasBundleRegistry' = None, settings = None, cache: bool = True) -> ResolvedBundle:
     """
     Resolve bundle identity using repo-aware OCI registry operations.
     
     This function provides a clean, injectable interface for bundle resolution
-    that works with any OciRegistry implementation (real or fake).
+    that works with any OrasBundleRegistry implementation (real or fake).
     
     Args:
         ref: Bundle reference (must include name)
-        registry: Optional OCI registry (defaults to HybridOciRegistry)
+        registry: Optional ORAS bundle registry (defaults to OrasBundleRegistry)
         settings: Optional settings (defaults to loading from environment)
         cache: Whether to prepare cache directory structure
         
@@ -186,14 +179,13 @@ def resolve(ref: BundleRef, *, registry: 'OciRegistry' = None, settings = None, 
     Raises:
         ValueError: If ref doesn't include name or is malformed
         BundleNotFoundError: If bundle cannot be found
-        OciError: For registry operation errors
         
     Examples:
         >>> # Use default registry
         >>> resolved = resolve(BundleRef(name="my-bundle", version="1.0"))
         
         >>> # Inject specific registry (e.g., for testing)
-        >>> fake_registry = FakeOciRegistry()
+        >>> fake_registry = FakeOrasBundleRegistry()
         >>> resolved = resolve(ref, registry=fake_registry, settings=fake_settings)
     """
     # Validate ref has required name field
@@ -202,13 +194,18 @@ def resolve(ref: BundleRef, *, registry: 'OciRegistry' = None, settings = None, 
     
     # Load settings if not provided
     if settings is None:
-        from .settings import load_settings_from_env
-        settings = load_settings_from_env()
+        from .settings import create_settings_from_env
+        settings = create_settings_from_env()
     
     # Use provided registry or create default
     if registry is None:
-        from .storage.registry_factory import make_registry
-        registry = make_registry(settings)
+        try:
+            from .storage.oras_bundle_registry import OrasBundleRegistry
+            registry = OrasBundleRegistry(settings)
+        except ImportError:
+            # Fall back to old registry factory for tests
+            from .storage.registry_factory import make_registry
+            registry = make_registry(settings)
     
     # Use new OCI-based resolver
     from .storage.resolve_oci import resolve_oci
@@ -223,7 +220,7 @@ def materialize(
     overwrite: bool = False,
     prefetch_external: bool = False,
     provider: ContentProvider,
-    registry: 'OciRegistry' = None,
+    registry: 'OrasBundleRegistry' = None,
     settings = None,
 ) -> MaterializeResult:
     """
@@ -244,7 +241,7 @@ def materialize(
         overwrite: Whether to overwrite conflicting files
         prefetch_external: Whether to download external data immediately
         provider: ContentProvider to enumerate entries for materialization
-        registry: Optional OCI registry (defaults to HybridOciRegistry)
+        registry: Optional ORAS bundle registry (defaults to OrasBundleRegistry)
         settings: Optional settings (passed to resolve())
         
     Returns:
@@ -524,7 +521,7 @@ def _write_provenance(dest_path: Path, resolved: ResolvedBundle, role: str) -> N
     
     payload = {
         "manifest_digest": resolved.manifest_digest,
-        "media_type": getattr(resolved, "media_type", "application/vnd.modelops.bundle.manifest+json"),
+        "media_type": getattr(resolved, "media_type", "application/json"),
         "role": role,
         "roles": resolved.roles,
         "layer_indexes": resolved.layer_indexes,

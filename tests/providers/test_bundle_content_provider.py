@@ -12,7 +12,7 @@ import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 from modelops_bundles.settings import Settings
 from tests.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime_types import MatEntry
@@ -68,7 +68,7 @@ class TestIterEntries:
     
     def test_emits_oras_and_external_entries(self):
         """Test happy path: yields both ORAS and external entries."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -130,7 +130,7 @@ class TestIterEntries:
 
     def test_missing_layer_index_raises(self):
         """Test that missing layer in layer_indexes raises clear error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -144,7 +144,7 @@ class TestIterEntries:
 
     def test_missing_index_manifest_raises(self):
         """Test that missing index manifest in ORAS raises clear error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
         
@@ -157,7 +157,7 @@ class TestIterEntries:
 
     def test_invalid_media_type_raises(self):
         """Test that wrong mediaType in index raises clear error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -174,7 +174,7 @@ class TestIterEntries:
 
     def test_invalid_json_raises(self):
         """Test that malformed JSON in index raises clear error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()  
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
         
@@ -191,7 +191,7 @@ class TestIterEntries:
 
     def test_entry_missing_path_raises(self):
         """Test that entry without path raises clear error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -206,7 +206,7 @@ class TestIterEntries:
 
     def test_entry_layer_mismatch_raises(self):
         """Test that entry with wrong layer field raises error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -221,7 +221,7 @@ class TestIterEntries:
 
     def test_entry_missing_both_digest_and_external_raises(self):
         """Test that entry missing both digest and external raises error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -236,7 +236,7 @@ class TestIterEntries:
 
     def test_entry_has_both_digest_and_external_raises(self):
         """Test that entry with both digest and external raises error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -256,7 +256,7 @@ class TestIterEntries:
 
     def test_missing_oras_blob_raises(self):
         """Test that missing ORAS blob raises friendly error during fetch."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -274,12 +274,12 @@ class TestIterEntries:
         entry = entries[0]
         
         # But fetch_oras() should fail when content is actually needed
-        with pytest.raises(Exception):  # Will be raised by FakeOciRegistry when blob doesn't exist
+        with pytest.raises(Exception):  # Will be raised by FakeOrasBundleRegistry when blob doesn't exist
             provider.fetch_oras(entry)
 
     def test_external_entry_missing_required_fields_raises(self):
         """Test that external entry missing uri/sha256/size raises error."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -299,7 +299,7 @@ class TestIterEntries:
 
     def test_external_tier_optional(self):
         """Test that external tier field is optional."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -320,7 +320,7 @@ class TestIterEntries:
 
     def test_external_sha_format_enforced_by_matentry(self):
         """Test that provider propagates bad SHA256 that gets caught by MatEntry validation."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
         

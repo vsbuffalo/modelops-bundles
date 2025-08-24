@@ -16,11 +16,11 @@ from modelops_bundles.storage.oci_media_types import (
     OCI_EMPTY_CONFIG_SIZE
 )
 from modelops_bundles.settings import Settings
-from ..storage.fakes.fake_oci_registry import FakeOciRegistry
+from ..storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 
 
 def seed_bundle(
-    registry: FakeOciRegistry, 
+    registry: FakeOrasBundleRegistry, 
     settings: Settings, 
     name: str, 
     tag: str, 
@@ -95,7 +95,7 @@ def seed_bundle(
     return im_digest, bm_digest
 
 
-def seed_simple_bundle(registry: FakeOciRegistry, settings: Settings) -> str:
+def seed_simple_bundle(registry: FakeOrasBundleRegistry, settings: Settings) -> str:
     """
     Seed a simple test bundle with standard test data.
     

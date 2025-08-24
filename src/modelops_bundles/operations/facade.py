@@ -13,9 +13,7 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from ..runtime import resolve as _resolve, materialize as _materialize, MaterializeResult
 from ..runtime_types import ContentProvider
-from ..storage.oci_registry import OciRegistry
-from ..settings import load_settings_from_env
-from ..storage.registry_factory import make_registry
+from ..storage.oras_bundle_registry import OrasBundleRegistry
 
 
 def _apply_version_bump(current_version: str, bump: str) -> str:
@@ -99,7 +97,7 @@ class Operations:
     """
     
     def __init__(self, config: OpsConfig, provider: Optional[ContentProvider] = None, 
-                 registry: Optional[OciRegistry] = None, settings = None):
+                 registry: Optional[OrasBundleRegistry] = None, settings = None):
         """
         Initialize Operations facade.
         
@@ -114,12 +112,13 @@ class Operations:
         
         # Load settings if not provided
         if settings is None:
-            settings = load_settings_from_env()
+            from ..settings import create_settings_from_env
+            settings = create_settings_from_env()
         self.settings = settings
         
         # Create registry if not provided
         if registry is None:
-            self.registry = make_registry(settings)
+            self.registry = OrasBundleRegistry(settings)
         else:
             self.registry = registry
 

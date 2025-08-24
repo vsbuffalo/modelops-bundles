@@ -14,12 +14,12 @@ from modelops_contracts.artifacts import ResolvedBundle, LAYER_INDEX
 
 from ..runtime_types import ContentProvider, MatEntry, ByteStream
 from ..storage.base import ExternalStore  
-from ..storage.oci_registry import OciRegistry
+from ..storage.oras_bundle_registry import OrasBundleRegistry
 from ..storage.repo_path import build_repo
 from ..settings import Settings
 from ..path_safety import safe_relpath
 
-__all__ = ["BundleContentProvider", "default_provider_from_env"]
+__all__ = ["BundleContentProvider", "create_provider_from_env"]
 
 
 def _short_digest(digest: str) -> str:
@@ -40,12 +40,12 @@ class BundleContentProvider(ContentProvider):
     Constructor accepts stores and implements iter_entries() interface.
     """
     
-    def __init__(self, *, registry: OciRegistry, external: ExternalStore, settings: Settings) -> None:
+    def __init__(self, *, registry: OrasBundleRegistry, external: ExternalStore, settings: Settings) -> None:
         """
         Initialize the provider with storage interfaces.
         
         Args:
-            registry: OCI registry interface for registry operations
+            registry: ORAS bundle registry for registry operations
             external: External storage interface for blob operations  
             settings: Settings for repository path construction
         """
@@ -253,13 +253,12 @@ class BundleContentProvider(ContentProvider):
         return BytesIO(content_bytes)
 
 
-def default_provider_from_env() -> BundleContentProvider:
+def create_provider_from_env() -> BundleContentProvider:
     """
     Create BundleContentProvider with real adapters from environment settings.
     
-    This is the standard entry point for production use and CLI integration.
-    Loads settings from environment variables and creates real OCI registry and 
-    external storage adapters.
+    This factory creates a fresh provider instance every time without caching,
+    ensuring test isolation and eliminating global state.
     
     Returns:
         BundleContentProvider configured with real adapters
@@ -269,17 +268,24 @@ def default_provider_from_env() -> BundleContentProvider:
         ImportError: If required adapter dependencies are missing
         
     Example:
-        >>> provider = default_provider_from_env()
+        >>> provider = create_provider_from_env()
         >>> # Use with runtime.materialize(ref, dest, provider=provider)
     """
-    from ..settings import load_settings_from_env
-    from ..storage.registry_factory import make_registry
+    from ..settings import create_settings_from_env
+    from ..storage.oras_bundle_registry import OrasBundleRegistry
     from ..storage.object_store import AzureExternalAdapter
     
-    settings = load_settings_from_env()
+    settings = create_settings_from_env()
+    
+    # Validate Azure configuration is present
+    has_conn_str = bool(settings.az_connection_string)
+    has_account_key = bool(settings.az_account and settings.az_key)
+    
+    if not (has_conn_str or has_account_key):
+        raise ValueError("Azure authentication not configured. Set either AZURE_STORAGE_CONNECTION_STRING or (AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY)")
     
     # Create real adapters
-    registry = make_registry(settings)
+    registry = OrasBundleRegistry(settings)
     external_adapter = AzureExternalAdapter(settings=settings)
     
     return BundleContentProvider(
@@ -287,4 +293,5 @@ def default_provider_from_env() -> BundleContentProvider:
         external=external_adapter,
         settings=settings
     )
+
 

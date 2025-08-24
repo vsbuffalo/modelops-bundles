@@ -1,7 +1,7 @@
 """
 Tests for provider helper functions.
 
-Tests the default_provider_from_env() factory function.
+Tests the create_provider_from_env() factory function.
 """
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import os
 import pytest
 from unittest.mock import patch
 
-from modelops_bundles.providers.bundle_content import default_provider_from_env, BundleContentProvider
+from modelops_bundles.providers.bundle_content import create_provider_from_env, BundleContentProvider
 
 
-class TestDefaultProviderFromEnv:
-    """Test default_provider_from_env() factory function."""
+class TestCreateProviderFromEnv:
+    """Test create_provider_from_env() factory function."""
     
     def test_creates_provider_with_real_adapters(self):
         """Test that factory creates provider with real adapters."""
@@ -24,15 +24,14 @@ class TestDefaultProviderFromEnv:
             "AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=key"
         }
         
-        from modelops_bundles.settings import reset_settings_cache
-        reset_settings_cache()
+        # No need to reset cache - using dependency injection now
         
         # Mock the adapter imports to avoid dependency issues
         with patch.dict(os.environ, env, clear=True):
-            with patch('modelops_bundles.storage.registry_factory.make_registry') as mock_registry:
+            with patch('modelops_bundles.storage.oras_bundle_registry.OrasBundleRegistry') as mock_registry:
                 with patch('modelops_bundles.storage.object_store.AzureExternalAdapter') as mock_azure:
                     
-                    provider = default_provider_from_env()
+                    provider = create_provider_from_env()
                     
                     # Should return BundleContentProvider
                     assert isinstance(provider, BundleContentProvider)
@@ -50,12 +49,11 @@ class TestDefaultProviderFromEnv:
     
     def test_raises_on_missing_registry_config(self):
         """Test that factory raises when registry config missing."""
-        from modelops_bundles.settings import reset_settings_cache
-        reset_settings_cache()
+        # No need to reset cache - using dependency injection now
         
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="MODELOPS_REGISTRY_URL environment variable is required"):
-                default_provider_from_env()
+                create_provider_from_env()
     
     def test_raises_on_missing_azure_config(self):
         """Test that factory raises when Azure config missing."""
@@ -65,10 +63,9 @@ class TestDefaultProviderFromEnv:
             # No Azure config
         }
         
-        from modelops_bundles.settings import reset_settings_cache
-        reset_settings_cache()
+        # No need to reset cache - using dependency injection now
         
         with patch.dict(os.environ, env, clear=True):
-            with patch('modelops_bundles.storage.registry_factory.make_registry'):
+            with patch('modelops_bundles.storage.oras_bundle_registry.OrasBundleRegistry'):
                 with pytest.raises(ValueError, match="Azure authentication not configured"):
-                    default_provider_from_env()
+                    create_provider_from_env()

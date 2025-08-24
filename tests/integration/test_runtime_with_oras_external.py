@@ -14,7 +14,7 @@ import pytest
 
 from modelops_contracts.artifacts import ResolvedBundle, BundleRef, LAYER_INDEX
 from modelops_bundles.providers.bundle_content import BundleContentProvider
-from tests.storage.fakes.fake_oci_registry import FakeOciRegistry
+from tests.storage.fakes.fake_oras_bundle_registry import FakeOrasBundleRegistry
 from modelops_bundles.settings import Settings
 from tests.storage.fakes.fake_external import FakeExternalStore
 from modelops_bundles.runtime import materialize, resolve, WorkdirConflict
@@ -48,7 +48,7 @@ class TestRuntimeWithOrasExternal:
     
     def test_materialize_with_real_provider_oras_and_external(self, tmp_path):
         """Test full materialize workflow with ORAS files and external pointers."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -154,7 +154,7 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_runtime_role_excludes_data(self, tmp_path):
         """Test that runtime role only gets code + config, no data pointers."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -204,7 +204,7 @@ class TestRuntimeWithOrasExternal:
 
     def test_materialize_prefetch_external_with_conflicts(self, tmp_path):
         """Test prefetch_external=True with conflict detection."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -286,7 +286,7 @@ class TestRuntimeWithOrasExternal:
 
     def test_deterministic_materialization(self, tmp_path):
         """Test that repeated materialization is deterministic and idempotent."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore() 
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -377,7 +377,7 @@ class TestRuntimeWithOrasExternal:
 
     def test_reserved_prefix_via_provider_rejected(self, tmp_path):
         """Test that .mops/ path from provider gets rejected by runtime."""
-        oras = FakeOciRegistry()
+        oras = FakeOrasBundleRegistry()
         external = FakeExternalStore()
         provider = BundleContentProvider(registry=oras, external=external, settings=Settings(registry_url="http://localhost:5000", registry_repo="testns"))
 
@@ -428,7 +428,7 @@ class TestRuntimeWithOrasExternal:
 
 def test_resolve_digest_only_reference():
     """Test resolve with digest-only reference."""
-    oras = FakeOciRegistry()
+    oras = FakeOrasBundleRegistry()
     external = FakeExternalStore()
     
     # Create a layer index with external entries

@@ -1,7 +1,7 @@
 """
 OCI-based bundle resolution.
 
-Implements bundle resolution directly on top of the OciRegistry protocol,
+Implements bundle resolution directly using OrasBundleRegistry,
 replacing the legacy resolve_http implementation. This provides a clean
 path from BundleRef to ResolvedBundle using repo-aware registry operations.
 """
@@ -15,24 +15,24 @@ from modelops_contracts.artifacts import BundleRef, ResolvedBundle
 
 from ..runtime import BundleNotFoundError
 from ..settings import Settings
-from .oci_media_types import BUNDLE_MANIFEST
-from .oci_registry import OciRegistry
+from .oci_media_types import BUNDLE_MANIFEST_TITLE, MODELOPS_TITLE_ANNOTATION, BUNDLE_MANIFEST
+from .oras_bundle_registry import OrasBundleRegistry
 from .repo_path import build_repo
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_oci(ref: BundleRef, registry: OciRegistry, settings: Settings, 
+def resolve_oci(ref: BundleRef, registry: OrasBundleRegistry, settings: Settings, 
                 cache: bool = True) -> ResolvedBundle:
     """
-    Resolve bundle using OciRegistry protocol.
+    Resolve bundle using OrasBundleRegistry.
     
     This function replaces resolve_http and is built directly on the
-    repo-aware OciRegistry abstraction for cleaner dependency management.
+    OrasBundleRegistry for cleaner dependency management.
     
     Args:
         ref: Bundle reference to resolve
-        registry: OCI registry implementation
+        registry: ORAS bundle registry or OCI registry implementation
         settings: Settings for repository path construction
         cache: Whether to prepare cache directory
         
@@ -79,7 +79,7 @@ def resolve_oci(ref: BundleRef, registry: OciRegistry, settings: Settings,
         if not bundle_descriptor:
             raise BundleNotFoundError(
                 f"No bundle manifest layer found in {repo}:{manifest_ref}. "
-                f"Expected layer with mediaType '{BUNDLE_MANIFEST}'"
+                f"Expected layer with title annotation '{BUNDLE_MANIFEST_TITLE}' or media type '{BUNDLE_MANIFEST}'"
             )
         
         # Step 4: Fetch and parse bundle manifest
@@ -95,7 +95,16 @@ def resolve_oci(ref: BundleRef, registry: OciRegistry, settings: Settings,
         
         # Step 5: Extract metadata
         roles = bundle_manifest.get("roles", {})
-        layers = bundle_manifest.get("layers", [])
+        layers_raw = bundle_manifest.get("layers", {})
+        
+        # Handle both dict and list formats for layers
+        if isinstance(layers_raw, dict):
+            # New format: dict mapping layer name -> digest
+            layers = list(layers_raw.keys())
+        else:
+            # Old format: list of layer names
+            layers = layers_raw
+            
         layer_indexes = bundle_manifest.get("layer_indexes", {})
         external_index_present = bundle_manifest.get("external_index_present", False)
         
@@ -135,6 +144,8 @@ def _find_bundle_manifest_descriptor(oci_manifest: dict) -> dict | None:
     """
     Find bundle manifest layer descriptor in OCI manifest.
     
+    Supports both new annotation-based detection and legacy media type detection.
+    
     Args:
         oci_manifest: Parsed OCI image manifest
         
@@ -143,13 +154,26 @@ def _find_bundle_manifest_descriptor(oci_manifest: dict) -> dict | None:
     """
     # Check layers for bundle manifest
     for layer in oci_manifest.get("layers", []):
+        # Try new annotation-based detection first
+        annotations = layer.get("annotations", {})
+        if annotations.get(MODELOPS_TITLE_ANNOTATION) == BUNDLE_MANIFEST_TITLE:
+            return layer
+        
+        # Fall back to legacy media type detection
         if layer.get("mediaType") == BUNDLE_MANIFEST:
             return layer
     
     # Check config blob (alternative location)
     config = oci_manifest.get("config", {})
-    if config.get("mediaType") == BUNDLE_MANIFEST:
-        return config
+    if config:
+        # Try new annotation-based detection first
+        annotations = config.get("annotations", {})
+        if annotations.get(MODELOPS_TITLE_ANNOTATION) == BUNDLE_MANIFEST_TITLE:
+            return config
+        
+        # Fall back to legacy media type detection
+        if config.get("mediaType") == BUNDLE_MANIFEST:
+            return config
     
     return None
 
